@@ -868,6 +868,7 @@ private:
         Point_2 pnt_on_seg;
 
         if (is_same_psrc_q or is_same_ptrg_q) {
+          pnt_on_seg = pnt;
           Point_2 otherpnt;
           if (is_same_psrc_q) {
             otherpnt = seg.target();
@@ -975,6 +976,9 @@ private:
           }
 
           // here p and t have common endpoint testp
+
+          std::cout << "debug testp=" << testp << " pnt="
+            << pnt << " pnt_on_seg=" << pnt_on_seg << std::endl;
 
           // check if testp equals pnt_on_seg
 
@@ -1121,6 +1125,7 @@ private:
 
         if (is_same_qsrc_p or is_same_qtrg_p) {
           std::cout << "debug: pss: p is endpoint of q" << std::endl;
+          pnt_on_seg = pnt;
           Point_2 otherpnt;
           if (is_same_qsrc_p) {
             otherpnt = seg.target();
@@ -1143,7 +1148,6 @@ private:
          
           std::cout << "debug: pss from pt to pt on seg" << std::endl;
 
-          Point_2 pnt_on_seg;
           if (is_positive_slope) {
             pnt_on_seg = compute_vertical_projection(l, pnt);
             lver = compute_line_from_to(pnt, pnt_on_seg);
@@ -1226,6 +1230,9 @@ private:
           }
 
           // here p and t have common endpoint testt
+
+          std::cout << "debug testt=" << testt 
+            << " pnt_on_seg=" << pnt_on_seg << std::endl;
 
           // check if testp equals pnt_on_seg
 
