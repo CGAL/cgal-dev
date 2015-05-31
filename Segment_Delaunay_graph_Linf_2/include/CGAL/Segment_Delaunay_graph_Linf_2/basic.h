@@ -1,0 +1,15 @@
+#ifndef CGAL_SEGMENT_DELAUNAY_GRAPH_LINF_2_BASIC_H
+#define CGAL_SEGMENT_DELAUNAY_GRAPH_LINF_2_BASIC_H
+
+#include <CGAL/basic.h>
+
+#define CGAL_SEGMENT_DELAUNAY_GRAPH_LINF_2_NS \
+  CGAL::SegmentDelaunayGraphLinf_2
+
+#ifndef CGAL_SDG_VERBOSE
+#define CGAL_SDG_DEBUG(a)
+#else
+#define CGAL_SDG_DEBUG(a) { a }
+#endif
+
+#endif // CGAL_SEGMENT_DELAUNAY_GRAPH_LINF_2_BASIC_H
