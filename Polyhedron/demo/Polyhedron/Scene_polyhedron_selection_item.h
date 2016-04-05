@@ -174,6 +174,7 @@ public:
   Scene_polyhedron_selection_item() 
     : Scene_polyhedron_item_decorator(NULL, false)
     {
+        is_active = true;
         for(int i=0; i<3; i++)
         {
             addVaos(i);
@@ -193,6 +194,7 @@ public:
   Scene_polyhedron_selection_item(Scene_polyhedron_item* poly_item, QMainWindow* mw) 
     : Scene_polyhedron_item_decorator(NULL, false)
     {
+        is_active = true;
         nb_facets = 0;
         nb_points = 0;
         nb_lines = 0;
@@ -215,7 +217,7 @@ public:
    ~Scene_polyhedron_selection_item()
     {
     }
-
+  void setActive(bool b){ is_active = b; }
 protected: 
   void init(Scene_polyhedron_item* poly_item, QMainWindow* mw)
   {
@@ -229,6 +231,8 @@ protected:
       SLOT(selected(const std::set<edge_descriptor>&)));
     connect(&k_ring_selector, SIGNAL(endSelection()), this,SLOT(endSelection()));
     connect(&k_ring_selector, SIGNAL(toogle_insert(bool)), this,SLOT(toggle_insert(bool)));
+    connect(&k_ring_selector, SIGNAL(selection_request(QEvent*)), this,
+      SIGNAL(selection_request(QEvent*)));
     k_ring_selector.init(poly_item, mw, Active_handle::VERTEX, -1);
 
     QGLViewer* viewer = *QGLViewer::QGLViewerPool().begin();
@@ -396,6 +400,10 @@ public:
     return true;
   }
 
+  void processEvent(QEvent *event)
+  {
+    k_ring_selector.processEvent(event);
+  }
   // select all of `active_handle_type`(vertex, facet or edge)
   void select_all() {
     switch(get_active_handle_type()) {
@@ -599,6 +607,8 @@ public:
   template <class Handle>
   void expand_selection(unsigned int steps)
   {
+    if(!is_active)
+      return;
     typedef Selection_traits<Handle, Scene_polyhedron_selection_item> Tr;
     Tr tr(this);
 
@@ -749,7 +759,7 @@ public:
 
 Q_SIGNALS:
   void simplicesSelected(CGAL::Three::Scene_item*);
-
+  void selection_request(QEvent*);
 public Q_SLOTS:
   void invalidateOpenGLBuffers() {
 
@@ -813,6 +823,8 @@ protected:
   template<typename HandleRange>
   bool treat_selection(const HandleRange& selection)
   {
+    if(!is_active)
+      return false;
     typedef typename HandleRange::value_type HandleType;
     Selection_traits<HandleType, Scene_polyhedron_selection_item> tr(this);
 
@@ -908,7 +920,6 @@ public:
   QColor vertex_color, facet_color, edge_color;
 
 private:
-
   mutable std::vector<float> positions_facets;
   mutable std::vector<float> normals;
   mutable std::vector<float> positions_lines;
@@ -920,6 +931,7 @@ private:
   using CGAL::Three::Scene_item::initialize_buffers;
   void initialize_buffers(CGAL::Three::Viewer_interface *viewer) const;
   void compute_elements() const;
+  bool is_active;
 
 };
 
