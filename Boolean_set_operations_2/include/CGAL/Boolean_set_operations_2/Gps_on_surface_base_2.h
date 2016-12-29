@@ -1730,8 +1730,8 @@ protected:
   }
 };
 
-} //namespace CGAL
-
 #include <CGAL/Boolean_set_operations_2/Gps_on_surface_base_2_impl.h>
+
+} //namespace CGAL
 
 #endif // CGAL_GPS_ON_SURFACE_BASE_2_H

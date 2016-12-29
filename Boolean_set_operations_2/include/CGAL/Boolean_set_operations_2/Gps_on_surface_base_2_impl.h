@@ -33,8 +33,6 @@
 #include <queue>
 #include <list>
 
-namespace CGAL {
-
 template <class Traits_, class TopTraits_, class ValidationPolicy>
 void Gps_on_surface_base_2<Traits_, TopTraits_,ValidationPolicy>::
 construct_polygon(Ccb_halfedge_const_circulator ccb, Polygon_2 & pgn,
@@ -788,7 +786,5 @@ template <class Traits_, class TopTraits_, class ValidationPolicy>
 
   return false;
 }
-
-} // namespace CGAL
 
 #endif // CGAL_GPS_UTILS_H
