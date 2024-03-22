@@ -15,11 +15,15 @@ Release date: October 2023
 - **Breaking change**: The usage of `boost::optional` has been replaced by `std::optional`. Packages affected are 2D Straight Line Skeleton, 3D Fast Intersection and Distance Computation (AABB Tree), and the Kernel intersection.
 - **Breaking change**: The usage of `boost::variant` has been replaced by `std::variant`. Packages affected are 2D Arrangements, and the Kernel intersection.
 - **Breaking change**: The file CMake file `UseCGAL.cmake` has been removed from CGAL. Usages of the CMake variables `${CGAL_USE_FILE}` and `${CGAL_LIBRARIES}` must be replaced by a link to the imported target `CGAL::CGAL`, for example: `target_link_library(the_target PRIVATE CGAL::CGAL)`.
+- The minimal supported version of Boost is now 1.72.0
 
 ### [Polygon Repair](https://doc.cgal.org/6.0/Manual/packages.html#PkgPolygonRepair) (new package)
 
 -   This package provides functions to repair polygons, polygons with holes, and multipolygons with holes
     using the odd-even heuristic.
+### Installation
+
+-   The CGAL\_Core library is no longer based on GMP but boost multiprecision now, and can be used with either gmp backend or boost backend.
 
 #### 2D Arrangements
 
