@@ -42,12 +42,12 @@ if(TARGET CGAL::Eigen3_support)
   create_single_source_cgal_program("contouring_mesh_offset.cpp")
 
   # undocumented
-  #create_single_source_cgal_program("dual_contouring_octree.cpp")
+#  create_single_source_cgal_program("dual_contouring_octree.cpp")
   create_single_source_cgal_program("dual_contouring_strategies.cpp")
   create_single_source_cgal_program("dual_contouring_intersection_oracles.cpp")
 
   target_link_libraries(dual_contouring PRIVATE CGAL::Eigen3_support)
-  target_link_libraries(dual_contouring_octree PRIVATE CGAL::Eigen3_support)
+#  target_link_libraries(dual_contouring_octree PRIVATE CGAL::Eigen3_support)
   target_link_libraries(contouring_discrete_data PRIVATE CGAL::Eigen3_support)
   target_link_libraries(contouring_inrimage PRIVATE CGAL::Eigen3_support)
   target_link_libraries(contouring_implicit_data PRIVATE CGAL::Eigen3_support)
@@ -57,7 +57,7 @@ if(TARGET CGAL::Eigen3_support)
 
   if(TARGET CGAL::TBB_support)
     target_link_libraries(dual_contouring PRIVATE CGAL::TBB_support)
-    target_link_libraries(dual_contouring_octree PRIVATE CGAL::TBB_support)
+#    target_link_libraries(dual_contouring_octree PRIVATE CGAL::TBB_support)
     target_link_libraries(contouring_discrete_data PRIVATE CGAL::TBB_support)
     target_link_libraries(contouring_inrimage PRIVATE CGAL::TBB_support)
     target_link_libraries(contouring_implicit_data PRIVATE CGAL::TBB_support)
