@@ -1,12 +1,14 @@
 # Release History
 
-
 ## [Release 6.1](https://github.com/CGAL/cgal/releases/tag/v6.1)
+
+### [Polygon Mesh Processing](https://doc.cgal.org/6.1/Manual/packages.html#PkgPolygonMeshProcessing)
+
+-   Added two functions for non-rigid registration of mesh to mesh and mesh to point cloud [`CGAL::Polygon_mesh_processing::non_rigid_mesh_to_mesh_registration()`](https://doc.cgal.org/6.1/Polygon_mesh_processing/group__PMP__registration__grp.html#ga04e4101a21663bebb689de30bb7d2f4e) and [`CGAL::Polygon_mesh_processing::non_rigid_mesh_to_points_registration()`](https://doc.cgal.org/6.1/Polygon_mesh_processing/group__PMP__registration__grp.html#ga466fd5b15e5de0b65faf48947a7f2bef) as well as a function to apply a transformation [`CGAL::Polygon_mesh_processing::apply_non_rigid_transformation()`](https://doc.cgal.org/6.1/Polygon_mesh_processing/group__PMP__registration__grp.html#gac022fccce4796cba9ff710865154b127)
 
 ### [Algebraic Kernel](https://doc.cgal.org/6.1/Manual/packages.html#PkgAlgebraicKernelD)
 
 -   **Breaking change**: Classes based on the RS Library are no longer provided.
-
 
 ## [Release 6.0.1](https://github.com/CGAL/cgal/releases/tag/v6.0.1)
 
