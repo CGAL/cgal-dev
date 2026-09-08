@@ -22,7 +22,7 @@ For the case of the Bolza surface, which is the most symmetric surface of genus 
 
 \section Section_Hyperbolic_Surface_Triangulations_Background Hyperbolic Surfaces
 
-We assume some familiarity with basic notions from covering space theory and from the theory of hyperbolic surfaces. See for instance  \cgalCite{cgal:b-gdg-83}\cgalCite{cgal:b-gscrs-92}.
+We assume some familiarity with basic notions from covering space theory and from the theory of hyperbolic surfaces. See for instance  \cgalCite{cgal:b-gdg-83}, \cgalCite{cgal:b-gscrs-92}.
 The <em>Poincaré disk</em> \f$ \mathbb{D} \f$ is a model of the hyperbolic plane whose point set is the open unit disk of the complex plane \f$ \mathbb{C} \f$.
 In this package, every hyperbolic surface \f$ S \f$ is closed (compact and without boundary) and orientable.
 The Poincaré disk \f$ \mathbb{D} \f$ is a universal covering space for \f$ S \f$, whose projection map \f$ \pi: \mathbb{D} \to S \f$ is a local isometry.
@@ -282,7 +282,7 @@ The generation of domains is implemented as described in Vincent Despré, Loïc 
 is implemented as described in Vincent Despré, Camille Lanuel, Marc Pouget and Monique Teillaud in
 \cgalCite{cgal:dlpt-naihs-25} and detailed in Camille Lanuel PhD thesis \cgalCite{cgal:l-cenhs-25} </span>
 The code and the documentation of the package were written by Loïc Dubois <span style="color:red">and Camille Lanuel</span>, under regular discussions with Vincent Despré, Marc Pouget and Monique Teillaud.
-The authors acknowledge support from the grants <a href="https://sos.loria.fr/">SoS</a>, <a href="https://perso.math.u-pem.fr/sabourau.stephane/min-max/min-max.html">MIN-MAX</a> <span style="color:red">and <a href="https://homepages.loria.fr/VDespre/Abysm/">Abysm</a></span> of the French National Research Agency ANR.
+The authors acknowledge support from the grants <a href="https://sos.loria.fr/">SoS</a> and <a href="https://perso.math.u-pem.fr/sabourau.stephane/min-max/min-max.html">MIN-MAX</a> <span style="color:red">and <a href="https://homepages.loria.fr/VDespre/Abysm/">Abysm</a></span> of the French National Research Agency ANR.
 
 */
 } /* namespace CGAL */
