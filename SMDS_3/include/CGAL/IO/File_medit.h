@@ -547,7 +547,7 @@ void
 output_to_medit(std::ostream& os,
                 const Tr& tr,
                 const Vertices_range& vertices,
-                const Edges_range& edges,
+                const Edges_range& /* edges */,
                 const Facets_range& facets,
                 const Cells_range& cells,
                 const Vertex_index_property_map& vertex_pmap,

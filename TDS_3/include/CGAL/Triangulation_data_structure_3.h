@@ -3692,12 +3692,13 @@ is_valid(bool verbose, int level ) const
           std::cerr << "Initial Euler characteristic = "
                     << initial_Euler_characteristic() << std::endl;
         }
+      }
+      else
         if (initial_Euler_characteristic() == 0)
         {
           CGAL_assertion(false);
           return false;
         }
-      }
       break;
     }
   case 2:
