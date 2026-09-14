@@ -2388,13 +2388,11 @@ public:
     }
 
     using V2V_tag = typename CGAL::dynamic_vertex_property_t<vertex_descriptor>;
-    using Vertex_to_vertex_map = typename boost::property_map<TriangleMesh, V2V_tag>::type;
 
     using E2E_tag = typename CGAL::dynamic_edge_property_t<edge_descriptor>;
-    using Edge_to_edge_map = typename boost::property_map<TriangleMesh, E2E_tag>::type;
 
-    Vertex_to_vertex_map disconnected_patches_vertex_to_tm2_vertex = get(V2V_tag(), tm1, GT::null_vertex());
-    Edge_to_edge_map disconnected_patches_edge_to_tm2_edge = get(E2E_tag(), tm1, edge(GT::null_halfedge(), tm2));
+    auto disconnected_patches_vertex_to_tm2_vertex = get(V2V_tag(), tm1, GT::null_vertex());
+    auto disconnected_patches_edge_to_tm2_edge = get(E2E_tag(), tm1, edge(GT::null_halfedge(), tm2));
 
     /// handle the operations updating tm1 and/or tm2
     if ( inplace_operation_tm1!=NONE )

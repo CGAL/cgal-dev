@@ -1396,18 +1396,16 @@ void fill_new_triangle_mesh(
   using edge_descriptor = typename GT::edge_descriptor;
 
   using V2V_tag = typename CGAL::dynamic_vertex_property_t<vertex_descriptor>;
-  using Vertex_to_vertex_map = typename boost::property_map<TriangleMesh, V2V_tag>::type;
 
   using E2E_tag = typename CGAL::dynamic_edge_property_t<edge_descriptor>;
-  using Edge_to_edge_map = typename boost::property_map<TriangleMesh, E2E_tag>::type;
 
   TriangleMesh& tm1 = patches_of_tm1.pm;
   TriangleMesh& tm2 = patches_of_tm2.pm;
 
-  Vertex_to_vertex_map tm1_to_output_vertices = get(V2V_tag(), tm1, GT::null_vertex()),
-                       tm2_to_output_vertices = get(V2V_tag(), tm2, GT::null_vertex());
-  Edge_to_edge_map tm1_to_output_edges = get(E2E_tag(), tm1, edge(GT::null_halfedge(), tm1)),
-                   tm2_to_output_edges = get(E2E_tag(), tm2, edge(GT::null_halfedge(), tm2));
+  auto tm1_to_output_vertices = get(V2V_tag(), tm1, GT::null_vertex()),
+       tm2_to_output_vertices = get(V2V_tag(), tm2, GT::null_vertex());
+  auto tm1_to_output_edges = get(E2E_tag(), tm1, edge(GT::null_halfedge(), tm1)),
+       tm2_to_output_edges = get(E2E_tag(), tm2, edge(GT::null_halfedge(), tm2));
 
   // this is the minimal number of edges that will be marked (intersection edge).
   // We cannot easily have the total number since some patch interior edges might be marked
@@ -1688,8 +1686,8 @@ void compute_inplace_operation_delay_removal_and_insideout(
   using V2V_tag = typename CGAL::dynamic_vertex_property_t<vertex_descriptor>;
   using E2E_tag = typename CGAL::dynamic_edge_property_t<edge_descriptor>;
 
-  EdgeMap tm2_edge_to_tm1_edge = get(E2E_tag(), tm2, edge(GT::null_halfedge(), tm2)),
-          tm1_edge_to_tm2_edge = get(E2E_tag(), tm1, edge(GT::null_halfedge(), tm1));
+  auto tm2_edge_to_tm1_edge = get(E2E_tag(), tm2, edge(GT::null_halfedge(), tm2)),
+       tm1_edge_to_tm2_edge = get(E2E_tag(), tm1, edge(GT::null_halfedge(), tm1));
   VertexMap tm2_vertex_to_tm1_vertex = get(V2V_tag(), tm2, GT::null_vertex()),
             tm1_vertex_to_tm2_vertex = get(V2V_tag(), tm1, GT::null_vertex());
   //maps intersection edges from tm2 to tm1
@@ -1980,13 +1978,12 @@ void compute_inplace_operation(
   typedef typename GT::vertex_descriptor vertex_descriptor;
 
   using V2V_tag = typename CGAL::dynamic_vertex_property_t<vertex_descriptor>;
-  using Vertex_to_vertex_map = typename boost::property_map<TriangleMesh, V2V_tag>::const_type;
 
   using E2E_tag = typename CGAL::dynamic_edge_property_t<edge_descriptor>;
   using Edge_to_edge_map = typename boost::property_map<TriangleMesh, E2E_tag>::const_type;
 
   Edge_to_edge_map tm2_edge_to_tm1_edge = get(E2E_tag(), tm2);
-  Vertex_to_vertex_map tm2_vertex_to_tm1_vertex = get(V2V_tag(), tm2, GT::null_vertex());
+  auto tm2_vertex_to_tm1_vertex = get(V2V_tag(), tm2, GT::null_vertex());
 
   //maps intersection edges from tm2 to the equivalent in tm1
   compute_border_edge_map(tm1, tm2,
