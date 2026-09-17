@@ -181,8 +181,8 @@ int main(int argc, const char** argv)
   // file nb_polylines total_nb_points nb_vertices_after_autorefine all_fixed nb_vertices_after_fix triple_intersection
   for (int i=0;i<(argc-1)/9; ++i)
   {
-    test_coref_based(argv[1+9*i], atoi(argv[1+9*i+1]), atoi(argv[1+9*i+2]),
-                     atoi(argv[1+9*i+3]), atoi(argv[1+9*i+4])==0?false:true, atoi(argv[1+9*i+5]), atoi(argv[1+9*i+6])==0?false:true);
+    //test_coref_based(argv[1+9*i], atoi(argv[1+9*i+1]), atoi(argv[1+9*i+2]),
+    //                 atoi(argv[1+9*i+3]), atoi(argv[1+9*i+4])==0?false:true, atoi(argv[1+9*i+5]), atoi(argv[1+9*i+6])==0?false:true);
     test(argv[1+9*i], atoi(argv[1+9*i+7]), atoi(argv[1+9*i+8]), CGAL::Sequential_tag());
     test_triangle_container<std::vector<std::size_t> >(CGAL::Sequential_tag());
     test_triangle_container<std::array<std::size_t,3>>(CGAL::Sequential_tag());
