@@ -448,8 +448,8 @@ compute_face_face_intersection(const FaceRange& face_range1,
 
   Tree_1 tree1;
   Tree_2 tree2;
-  helper_1.template build<Concurrency_tag>(tree1, tm1, vpm1);
-  helper_2.template build<Concurrency_tag>(tree2, tm2, vpm2);
+  helper_1.template build<Concurrency_tag>(face_to_test1, tree1, tm1, vpm1);
+  helper_2.template build<Concurrency_tag>(face_to_test2, tree2, tm2, vpm2);
 
   CGAL::AABB_trees::all_pairs_of_intersecting_primitives(tree1, tree2, out, parameters::concurrency_tag(Concurrency_tag()));
   return out;
@@ -1616,7 +1616,7 @@ template <class TriangleMeshRange,
 OutputIterator
 intersecting_meshes(const TriangleMeshRange& range,
                     OutputIterator out,
-                    const NamedParameters& /*np*/,
+                    const NamedParameters& np,
                     const NamedParametersRange& nps)
 {
   using parameters::choose_parameter;
@@ -1627,6 +1627,8 @@ intersecting_meshes(const TriangleMeshRange& range,
                                           NamedParameters,
                                           Sequential_tag
                                         > ::type;
+
+  bool report_overlap = choose_parameter(get_parameter(np, internal_np::overlap_test),false);
 
   using TriangleMeshIterator = typename TriangleMeshRange::const_iterator;
   using TriangleMesh = typename std::iterator_traits<TriangleMeshIterator>::value_type;
@@ -1646,24 +1648,26 @@ intersecting_meshes(const TriangleMeshRange& range,
   if(indexed_bboxes.empty())
     return out;
 
-  // // AABB_traits expects a bbox map associating the primitive ID
-  // // with its bounding box.
-  using Bbox_map = boost::vector_property_map<Bbox_3>;
-
   // The primitive ID is the index of the mesh.
   struct AABB_indexed_bbox_primitive
   {
     using Id = std::size_t;
-    using Datum = Bbox_3;
+    struct Datum : public Bbox_3
+    {
+      Datum() = default;
+      Datum(const Bbox_3& bbox) : Bbox_3(bbox) {}
+
+      const Datum& bbox() const { return *this; }
+    };
     using Point = typename GT::Point_3;
 
     AABB_indexed_bbox_primitive() = default;
-    AABB_indexed_bbox_primitive(typename std::vector<Indexed_bbox>::const_iterator it, const Bbox_map&)
+    AABB_indexed_bbox_primitive(typename std::vector<Indexed_bbox>::const_iterator it)
       : m_it(it)
     {}
 
     Id id() const { return m_it->index; }
-    const Datum& datum() const { return m_it->bbox; }
+    Datum datum() const { return Datum(m_it->bbox); }
     Point reference_point() const {
       const Bbox_3& b = m_it->bbox;
       return Point(b.xmin(), b.ymin(), b.zmin());
@@ -1674,13 +1678,10 @@ intersecting_meshes(const TriangleMeshRange& range,
   };
 
   using Primitive = AABB_indexed_bbox_primitive;
-  using Traits = CGAL::AABB_traits_3<GT, Primitive, Bbox_map>;
+  using Traits = CGAL::AABB_traits_3<GT, Primitive>;
   using Tree = CGAL::AABB_tree<Traits>;
 
-  boost::vector_property_map<Bbox_3> bbox_map(indexed_bboxes.size());
-  for(const auto& ib : indexed_bboxes)
-    put(bbox_map, ib.index, ib.bbox);
-  Tree tree(indexed_bboxes.begin(), indexed_bboxes.end(), bbox_map);
+  Tree tree(indexed_bboxes.begin(), indexed_bboxes.end());
 
   std::vector<std::pair<std::size_t, std::size_t>> candidates;
   CGAL::AABB_trees::all_pairs_of_intersecting_primitives<Concurrency_tag>(tree, std::back_inserter(candidates));
@@ -1690,7 +1691,8 @@ intersecting_meshes(const TriangleMeshRange& range,
     const TriangleMesh &mesh1 = range[p.first];
     const TriangleMesh &mesh2 = range[p.second];
 
-    if(CGAL::Polygon_mesh_processing::do_intersect(mesh1, mesh2, nps[p.first], nps[p.second]))
+    if(CGAL::Polygon_mesh_processing::do_intersect(mesh1, mesh2, nps[p.first].do_overlap_test_of_bounded_sides(report_overlap),
+                                                                 nps[p.second].do_overlap_test_of_bounded_sides(report_overlap)))
       *out++ = p;
   }
   return out;

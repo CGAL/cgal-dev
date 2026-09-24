@@ -18,6 +18,10 @@
 #include <CGAL/AABB_tree/internal/AABB_node.h>
 #include <CGAL/AABB_tree/internal/AABB_traversal_traits.h>
 
+#if CGAL_LINKED_WITH_TBB
+#include <tbb/task_group.h>
+#endif
+
 namespace CGAL {
 
 namespace internal { namespace AABB_tree {
@@ -121,7 +125,16 @@ void two_trees_traversal(const Tree_A& tree_A,
                          TwoTreeTraversalTraits &traits)
 {
   CGAL_precondition(tree_A.size() != 0 && tree_B.size() != 0);
-  two_trees_traversal<true, ConcurrencyTag>(*tree_A.root_node(), *tree_B.root_node(), tree_A.size(), tree_B.size(), traits);
+  if(tree_A.size() == 1){
+    if(tree_B.size() == 1)
+      traits.intersection(tree_A.singleton_data(), tree_B.singleton_data());
+    else
+      traits.intersection(tree_A.singleton_data(), *tree_B.root_node(), tree_B.size());
+  }
+  else if(tree_B.size() == 1)
+    traits.intersection(*tree_A.root_node(), tree_A.size(), tree_A.singleton_data());
+  else
+    two_trees_traversal<true, ConcurrencyTag>(*tree_A.root_node(), *tree_B.root_node(), tree_A.size(), tree_B.size(), traits);
 }
 
 // An optimization to traverse a tree with itself
