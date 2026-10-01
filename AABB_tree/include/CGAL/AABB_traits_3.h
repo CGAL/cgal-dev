@@ -757,11 +757,14 @@ private:
 
   Bounding_box compute_bbox(const Primitive& pr, const Default&)const
   {
-    return internal::Primitive_helper<AT>::get_datum(pr,*this).bbox();
+    if constexpr(std::is_same_v<typename Primitive::Datum, Bbox_3>)
+      return internal::Primitive_helper<AT>::get_datum(pr,*this);
+    else
+      return internal::Primitive_helper<AT>::get_datum(pr,*this).bbox();
   }
 
   /// Comparison functions
-  static bool less_x(const Primitive& pr1, const Primitive& pr2,const AABB_traits_3<GeomTraits,AABBPrimitive, BboxMap>& traits)
+  static bool less_x(const Primitive& pr1, const Primitive& pr2,const AABB_traits_3<GeomTraits, AABBPrimitive, BboxMap>& traits)
   {
     return GeomTraits().less_x_3_object()( internal::Primitive_helper<AT>::get_reference_point(pr1,traits),
                                            internal::Primitive_helper<AT>::get_reference_point(pr2,traits) );
