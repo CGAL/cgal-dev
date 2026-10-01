@@ -1,7 +1,11 @@
 #!/bin/bash
 #This script must be called from the CGAL root.
 set -e
-[ -n "$RUNNER_DEBUG" ] && set -x
+if [ -n "$RUNNER_DEBUG" ]; then
+  set -x
+  CMAKE_DEBUG_OPT=" -v"
+fi
+
 while test $# -gt 0
 do
     case "$1" in
@@ -35,24 +39,65 @@ do
   fi
 done
 
-cmake -DCGAL_ENABLE_CHECK_HEADERS=TRUE -DDOXYGEN_EXECUTABLE="$DOX_PATH" -DCGAL_COPY_DEPENDENCIES=TRUE -DCMAKE_CXX_FLAGS="-std=c++1y" ..
+group()
+{
+    local title=$1
+    shift
+    local status=0
+    local log_file
+    if [ "$GITHUB_ACTIONS" = "true" ]; then
+        echo "::group::$title"
+    else
+        printf '\n## %s\n\n' "$title"
+    fi
+    if [ "$GITHUB_ACTIONS" = "true" ] && [ -n "$GITHUB_STEP_SUMMARY" ]; then
+        log_file=$(mktemp) || return $?
+        if (set -o pipefail; "$@" 2>&1 | tee "$log_file"); then
+            status=0
+        else
+            status=$?
+        fi
+        if [ "$status" -ne 0 ]; then
+            local diagnostics
+            diagnostics=$(grep -E '(^|[[:space:]])(fatal )?error:|undefined reference|collect2: error:|ld: error:' "$log_file" | tail -n 100 || true)
+            {
+                printf '## %s failed\n\n' "$title"
+                if [ -n "$diagnostics" ]; then
+                    # shellcheck disable=SC2016
+                    printf '```text\n%s\n```\n\n' "$diagnostics"
+                else
+                    printf 'No compiler or linker diagnostics were found in the command output. See the job log for details.\n\n'
+                fi
+            } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        rm -f "$log_file"
+    else
+        "$@" || status=$?
+    fi
+    if [ "$GITHUB_ACTIONS" = "true" ]; then
+        echo "::endgroup::"
+    fi
+    return "$status"
+}
+
+group "Configure dependency check" cmake -DCGAL_ENABLE_CHECK_HEADERS=TRUE -DDOXYGEN_EXECUTABLE="$DOX_PATH" -DCGAL_COPY_DEPENDENCIES=TRUE -DCMAKE_CXX_FLAGS="-std=c++1y" ..
 if [ -n "$DO_CHECK_HEADERS" ]; then
-    cmake --build . -j"$(nproc --all)" --target check_headers -v -- -k
-    cmake --build . -j"$(nproc --all)" --target check_headers_linked_twice -v -- -k
+    group "Check headers" cmake --build . -j"$(nproc --all)" --target check_headers ${CMAKE_DEBUG_OPT:+"$CMAKE_DEBUG_OPT"} -- -k
+    group "Check headers linked twice" cmake --build . -j"$(nproc --all)" --target check_headers_linked_twice ${CMAKE_DEBUG_OPT:+"$CMAKE_DEBUG_OPT"} -- -k
 fi
-cmake --build . -j"$(nproc --all)" --target packages_dependencies -v -- -k
+group "Collect package dependencies" cmake --build . -j"$(nproc --all)" --target packages_dependencies ${CMAKE_DEBUG_OPT:+"$CMAKE_DEBUG_OPT"} -- -k
 echo " Checks finished"
 for pkg_path in "$CGAL_ROOT"/*
 do
   pkg=$(basename "$pkg_path")
   if [ -f "$pkg_path/package_info/$pkg/dependencies" ]; then
-    PKG_DIFF=$(grep -Fxv -f "$pkg_path/package_info/$pkg/dependencies.old" "$pkg_path/package_info/$pkg/dependencies" || true)
-    if [ -n "$PKG_DIFF" ]; then
-      TOTAL_RES="Differences in $pkg:\n$PKG_DIFF\nare new and not committed.\n$TOTAL_RES"
-    fi
-    PKG_DIFF=$(grep -Fxv -f "$pkg_path/package_info/$pkg/dependencies" "$pkg_path/package_info/$pkg/dependencies.old" || true)
-    if [ -n "$PKG_DIFF" ]; then
-      TOTAL_RES="Differences in $pkg:\n$PKG_DIFF\nhave disappeared.\n$TOTAL_RES"
+    DIFF_STATUS=0
+    PKG_DIFF=$(diff -u "$pkg_path/package_info/$pkg/dependencies.old" "$pkg_path/package_info/$pkg/dependencies") || DIFF_STATUS=$?
+    if [ "$DIFF_STATUS" -eq 1 ]; then
+      TOTAL_RES="Differences in $pkg:\n$PKG_DIFF\n$TOTAL_RES"
+    elif [ "$DIFF_STATUS" -ne 0 ]; then
+      echo "Failed to compare dependencies for $pkg" >&2
+      exit "$DIFF_STATUS"
     fi
     if [ -f "$pkg_path/package_info/$pkg/dependencies.old" ]; then
       rm "$pkg_path/package_info/$pkg/dependencies.old"
