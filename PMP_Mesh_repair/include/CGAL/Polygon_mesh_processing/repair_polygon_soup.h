@@ -679,6 +679,7 @@ Polygon construct_canonical_polygon(const PointRange& points,
   if(polygon.size() < 2)
   {
     reversed = false;
+    // workaround warning in gcc
     return polygon.empty() ? Polygon{} : Polygon{ polygon[0] };
   }
 
