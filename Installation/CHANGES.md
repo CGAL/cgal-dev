@@ -11,7 +11,8 @@ Release date: December 2026
   and can be applied on the output of the 3D Mesh Generation Package.
 
 ### [Linear Cell Complex](https://doc.cgal.org/6.3/Manual/packages.html#PkgLinearCellComplex)
-- Added `tetrahedron_soup_to_lcc()` to import a tetrahedron soup into a linear cell complex.
+- added `tetrahedron_soup_to_lcc()` to import a tetrahedron soup into a linear cell complex.
+- added `generate_hexahedral_mesh_using_two_refinement()` to generate a pure hexahedral mesh from a surface triangle mesh using the two-refinement algorithm described in the paper "A template-based approach for parallel hexahedral two-refinement" of Steven J. Owen, Ryan M. Shih and Corey D. Ernst.
 
 ### [2D and 3D Fast Intersection and Distance Computation (AABB Tree)](https://doc.cgal.org/6.3/Manual/packages.html#PkgAABBTree)
 - `CGAL::AABB_tree::build()` now accepts an optional `ConcurrencyTag` template parameter (`CGAL::Sequential_tag` by default).
