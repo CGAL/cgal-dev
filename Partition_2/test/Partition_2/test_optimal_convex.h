@@ -10,6 +10,8 @@ static bool partition_is_valid(const std::list<Polygon_2>& pieces)
          return false;
    }
    return true;
+}
+
 // The pieces for every choice of first vertex: always valid, and always the
 // optimal number (issue #4398 depended on the first vertex).
 void check_optimal_convex_count(const std::vector<Point_2>& points,
