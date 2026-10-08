@@ -78,6 +78,7 @@ Release date: December 2026
 
 - **Breaking change** The return type as well as type of the parameter for the file name passed to IO functions is changed from
   `std::string`  to `std::filesystem::path`, which enables to use non latin languages like Chinese for directory and file names.
+- Added overloaded versions of the functions `CGAL::IO::read_MEDIT()` and `CGAL::IO::write_MEDIT()`, for indexed tetrahedron soups.
 
 ### [Basic Viewer](https://doc.cgal.org/6.3/Manual/packages.html#PkgBasicViewer)
 
@@ -87,8 +88,6 @@ Release date: December 2026
   `is_face_valued` and `face_value` (with `face_value_name` for the legend). As an example, the
   surface mesh drawer exposes the aspect ratio of each face.
 
-<<<<<<< HEAD
-=======
 ### [STL Extension](https://doc.cgal.org/6.3/Manual/packages.html#PkgSTLExtension)
 
 - **Breaking change**:  Removed the class templates `Twotuple`,`Threetuple`, `Fourtuple`, `Sixtuple` which were deprecated since CGAL-3.4
@@ -98,7 +97,6 @@ Release date: December 2026
 
 - **Breaking change**:  `CGAL::IO::Color`  is no longer imported into `namespace CGAL`.
 
->>>>>>> d49913777ef99cb81da01192fb6181dde1074d37
 ## [Release 6.2](https://github.com/CGAL/cgal/releases/tag/v6.2)
 
 Release date: June 2026
