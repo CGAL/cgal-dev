@@ -1240,14 +1240,10 @@ struct With_offset_tag {
                    // from 0 to number_of_vertices-1.
 };
 
-template <typename Tr>
 struct With_point_tag : public With_offset_tag {
-  Tr* tr;
 };
 
-template <typename Tr>
-struct With_point_and_info_tag : public With_point_tag<Tr> {
-};
+struct With_point_and_info_tag : public With_point_tag {};
 
 template <class DSC, bool Const>
 struct Output_rep<CGAL::internal::CC_iterator<DSC, Const>, With_offset_tag>
@@ -1270,8 +1266,8 @@ struct Output_rep<CGAL::internal::CC_iterator<DSC, Const>, With_offset_tag>
   }
 };
 
-template <class DSC, bool Const, typename Tr>
-struct Output_rep<CGAL::internal::CC_iterator<DSC, Const>, With_point_tag<Tr>>
+template <class DSC, bool Const>
+struct Output_rep<CGAL::internal::CC_iterator<DSC, Const>, With_point_tag>
   : public Output_rep<CGAL::internal::CC_iterator<DSC, Const>, With_offset_tag>
 {
   using CC_iterator = CGAL::internal::CC_iterator<DSC, Const>;
@@ -1280,17 +1276,15 @@ struct Output_rep<CGAL::internal::CC_iterator<DSC, Const>, With_point_tag<Tr>>
 
   using Base::Base;
 
-  With_point_tag<Tr> tag;
-
-  Output_rep(const CC_iterator it, With_point_tag<Tr> tag = {})
-    : Base(it, tag), tag(tag) {}
+  Output_rep(const CC_iterator it, With_point_tag tag = {})
+    : Base(it, tag) {}
 
   std::ostream& operator()(std::ostream& out) const {
     this->Base::operator()(out);
     if(this->it.operator->() != nullptr) {
       if(Time_stamper::time_stamp(this->it.operator->()) == 0)
         return out << "= infinite_vertex()";
-      return out << "= " << tag.tr->point(this->it);
+      return out << "= " << this->it->point();
     }
     else
       return out;

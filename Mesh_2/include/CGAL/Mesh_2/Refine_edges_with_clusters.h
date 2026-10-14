@@ -73,7 +73,6 @@ class Refine_edges_base_with_clusters :
   mutable bool cluster_splitted;
   Cluster ca, cb;
   clusters_iterator ca_it, cb_it;
-  With_point_tag<Tr> wpt;
 
 public:
   using Super::triangulation_ref_impl;
@@ -81,7 +80,7 @@ public:
   /** \name CONSTRUCTORS */
 
   Refine_edges_base_with_clusters(Tr& tr_, Clusters<Tr>& c_)
-    : Super(tr_), clusters(c_), wpt{{-1}, &tr_}
+    : Super(tr_), clusters(c_)
   {
   }
 
@@ -99,8 +98,8 @@ public:
     auto display_return_point = [&](const Point& p) {
 #ifdef CGAL_MESH_2_DEBUG_REFINEMENT_POINTS
       std::cerr << "Refine_edges_with_clusters::refinement_point_impl(Edge: ("
-                << IO::oformat(this->va, wpt) << ", "
-                << IO::oformat(this->vb, wpt) << ") = "
+                << IO::oformat(this->va, With_point_tag{}) << ", "
+                << IO::oformat(this->vb, With_point_tag{}) << ") = "
                 << p << '\n';
 #endif // CGAL_MESH_2_DEBUG_REFINEMENT_POINTS
       return p;
@@ -118,8 +117,8 @@ public:
           va_has_a_cluster = true;
           vb_has_a_cluster = true;
 #ifdef CGAL_MESH_2_DEBUG_CLUSTERS
-          std::cerr << "midpoint(" << IO::oformat(this->va, wpt)
-                    << " , " << IO::oformat(this->vb, wpt) << ")\n";
+          std::cerr << "midpoint(" << IO::oformat(this->va, With_point_tag{})
+                    << " , " << IO::oformat(this->vb, With_point_tag{}) << ")\n";
 #endif // CGAL_MESH_2_DEBUG_CLUSTERS
           return display_return_point(
               this->maybe_snap_to_existing_vertex(edge, midpoint(this->va->point(), this->vb->point())));
@@ -139,8 +138,8 @@ public:
       // no cluster
 
 #ifdef CGAL_MESH_2_DEBUG_CLUSTERS
-      std::cerr << "midpoint(" << IO::oformat(this->va, wpt)
-                << " , " << IO::oformat(this->vb, wpt) << ")\n";
+      std::cerr << "midpoint(" << IO::oformat(this->va, With_point_tag{})
+                << " , " << IO::oformat(this->vb, With_point_tag{}) << ")\n";
 #endif // CGAL_MESH_2_DEBUG_CLUSTERS
 
       return Super::refinement_point_impl(edge);
@@ -273,9 +272,8 @@ private:
     const Point& b = vb->point();
 
 #ifdef CGAL_MESH_2_DEBUG_CLUSTERS
-    With_point_tag wpt{{-1}, &this->tr};
-    std::cerr << "split_cluster_point(" << IO::oformat(va, wpt)
-              << " , " << IO::oformat(vb, wpt) << ")\n"
+    std::cerr << "split_cluster_point(" << IO::oformat(va, With_point_tag{})
+              << " , " << IO::oformat(vb, With_point_tag{}) << ")\n"
               << "  reduced: " << c.is_reduced() << "\nresult:  ";
 #endif // CGAL_MESH_2_DEBUG_CLUSTERS
     if( c.is_reduced() ) {
