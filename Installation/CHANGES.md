@@ -51,6 +51,15 @@ Release date: December 2026
 - **Breaking change** Removed the member function `vertices_in_conflict()` of the Delaunay and the regular triangulation  which were deprecated  since CGAL-3.8
 - Removed the concept `WeightedPoint`
 
+### [3D Mesh Generation](https://doc.cgal.org/6.3/Manual/packages.html#PkgMesh3)
+
+- **Breaking change**: The template parameter of `CGAL::Mesh_cell_criteria_3`,
+  `CGAL::Mesh_edge_criteria_3`, and `CGAL::Mesh_facet_criteria_3` is now the
+  mesh complex type `C3T3`, rather than its triangulation type. Code that
+  explicitly instantiates these criteria classes must be updated accordingly.
+  `CGAL::Mesh_criteria_3` also uses `C3T3` as its template parameter, but
+  continues to accept the triangulation type for backward compatibility.
+
 ### [Polygon Mesh Processing - Mesh Repair](https://doc.cgal.org/6.3/Manual/packages.html#PkgPMPMeshRepair)
 - **Breaking change**: Removed the function `CGAL::Polygon_mesh_processing::smooth_mesh()` which was deprecated since CGAL-5.5.
 - **Breaking change**: Removed the overload of the functions `CGAL::Polygon_mesh_processing::triangulate_hole()`, `CGAL::Polygon_mesh_processing::triangulate_and_refine_hole()`, and `CGAL::Polygon_mesh_processing::triangulate_refine_and_fair_hole()` having output iterators for vertices and faces as parameter, which were deprecated since CGAL-6.0.
