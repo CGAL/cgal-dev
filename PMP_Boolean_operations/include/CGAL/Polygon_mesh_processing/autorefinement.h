@@ -1520,6 +1520,10 @@ bool autorefine_triangle_soup(PointRange& soup_points,
     insert_point_id(pid);
   }
 
+#ifdef CGAL_AUTOREF_USE_DEBUG_PARALLEL_TIMERS
+  std::cout << timer.time() << "s to fill point id map" << std::endl;
+#endif
+
   TriangleRange soup_triangles_out;
   soup_triangles_out.reserve(soup_triangles.size());
 
@@ -1555,6 +1559,10 @@ bool autorefine_triangle_soup(PointRange& soup_points,
       tri_inter_ids_inverse[tiid]=f;
     }
   }
+
+#ifdef CGAL_AUTOREF_USE_DEBUG_PARALLEL_TIMERS
+  std::cout << timer.time() << " to build the output" << std::endl;
+#endif
 
   // import refined triangles
 
@@ -1685,7 +1693,10 @@ bool autorefine_triangle_soup(PointRange& soup_points,
 
 #ifndef CGAL_NDEBUG
   CGAL_PMP_AUTOREFINE_VERBOSE("check soup");
-  CGAL_assertion( !does_triangle_soup_self_intersect<Concurrency_tag>(exact_soup_points, soup_triangles_out) );
+  // If split_triangle_range is defined, intersection can still be present inside one of the range
+  if constexpr(parameters::is_default_parameter<NamedParameters, internal_np::split_triangle_range_at_t>::value){
+    CGAL_assertion( !does_triangle_soup_self_intersect<Concurrency_tag>(exact_soup_points, soup_triangles_out) );
+  }
 #else
 #ifdef CGAL_DEBUG_PMP_AUTOREFINE
   CGAL_PMP_AUTOREFINE_VERBOSE("check soup");
