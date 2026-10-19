@@ -34,13 +34,16 @@ template <typename G>
 struct No_mark
 {
   friend
+  constexpr
   bool get(No_mark<G>,
                   typename boost::graph_traits<G>::edge_descriptor)
   {
     return false;
   }
-  friend void put(No_mark<G>,
-                  typename boost::graph_traits<G>::edge_descriptor, bool)
+  friend
+  constexpr
+  void put(No_mark<G>,
+           typename boost::graph_traits<G>::edge_descriptor, bool)
   {}
 };
 
