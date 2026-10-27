@@ -20,6 +20,8 @@
 #include <CGAL/Named_function_parameters.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <numeric>
 
 // CGAL includes.
@@ -27,6 +29,12 @@
 #include <CGAL/convex_hull_2.h>
 #include <CGAL/linear_least_squares_fitting_3.h>
 #include <CGAL/Real_timer.h>
+#include <CGAL/tags.h>
+#ifdef CGAL_LINKED_WITH_TBB
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/partitioner.h>
+#endif
 #include <CGAL/Constrained_Delaunay_triangulation_2.h>
 #include <CGAL/Constrained_triangulation_plus_2.h>
 #include <CGAL/Triangulation_vertex_base_with_info_2.h>
@@ -93,6 +101,7 @@ public:
 
     struct Face_attribute {
       int input_polygon_index; // Non-negative numbers represent the index of the input polygon. Negative numbers correspond to the values defined in the enum `Kinetic_space_partition_3::Face_support`.
+      int input_plane_index; // Non-negative numbers represent the index of the plane of the input polygon into `input_planes()`. Negative numbers like input_polygon_index.
       typename Intersection_kernel::Plane_3 plane;
       bool part_of_initial_polygon;
     };
@@ -138,7 +147,6 @@ private:
   using Propagation = KSP_3::internal::Vertex_propagation<Kernel, Intersection_kernel>;
   using Finalizer   = KSP_3::internal::Finalizer<Kernel, Intersection_kernel>;
 
-  using Polygon_mesh = CGAL::Surface_mesh<Point_3>;
   using Timer        = CGAL::Real_timer;
   using Parameters = KSP::internal::Parameters_3<FT>;
 
@@ -207,30 +215,37 @@ private:
 
 private:
   struct Sub_partition {
-    Sub_partition() : parent(static_cast<std::size_t>(- 1)) {}
+    Sub_partition() {}
     std::shared_ptr<Data_structure> m_data;
     std::array<typename Intersection_kernel::Point_3, 8> bbox;
-    std::vector<typename Intersection_kernel::Plane_3> m_bbox_planes;
     std::vector<std::size_t> input_polygons;
     std::vector<std::vector<typename Intersection_kernel::Point_3> > clipped_polygons;
     std::vector<typename Intersection_kernel::Plane_3> m_input_planes;
-    std::size_t parent;
-    std::vector<std::size_t> children;
-    std::size_t split_plane;
     std::size_t index;
+
+    // Results of the finalization. They are extracted from m_data after the Finalizer has run and m_data is released afterwards.
+    // They are the only data accessed by make_conformal() and the access functions.
+    struct Volume {
+      std::vector<std::size_t> faces; // Indices into face2vertices.
+      Point_3 centroid;
+    };
 
     std::vector<std::pair<Index, Index> > face_neighbors;
     std::vector<std::vector<Index> > face2vertices;
-
-    std::vector<typename Data_structure::Volume_cell> volumes;
-    //std::vector<std::vector<std::size_t> > face2vertices;
-    //std::vector<Point_3> exact_vertices;
+    std::vector<Volume> volumes;
+    std::vector<Point_3> vertices;
+    std::vector<IkPoint_3> exact_vertices;
+    std::vector<std::size_t> face2sp; // Support plane index for each face.
+    std::vector<std::size_t> face_input; // Index into input_polygons for each face, std::size_t(-1) if none.
+    std::vector<bool> face_part_of_input_polygon;
+    std::vector<typename Intersection_kernel::Plane_3> sp_exact_planes; // Exact plane for each support plane.
+    std::vector<std::size_t> sp_input_polygon; // Index into input_polygons for each support plane, std::size_t(-1) if none.
+    std::map<std::size_t, std::size_t> input2sp; // Maps index into input_polygons onto support plane index.
 
     typename Octree::Node_index node;
   };
 
   Parameters m_parameters;
-  std::array<Point_3, 8> m_bbox;
   CGAL::Aff_transformation_3<Intersection_kernel> m_transform;
   std::vector<Sub_partition> m_partition_nodes; // Tree of partitions.
   std::vector<std::size_t> m_partitions; // Contains the indices of the leaf nodes, the actual partitions to be calculated.
@@ -238,8 +253,17 @@ private:
   std::vector<std::vector<std::size_t> > m_polygons;
   std::vector<std::vector<Point_3> > m_input_polygons;
   std::vector<typename Intersection_kernel::Plane_3> m_input_planes;
-  std::vector<Point_2> m_input_centroids;
-  std::vector<std::size_t> m_input2regularized; // Mapping from actual input planes to regularized input planes.
+
+  // Polygons that are coplanar up to a tolerance share a plane.
+  struct Coplanar_group {
+    std::vector<Point_3> points; // Vertices of the first polygon of the group.
+    Plane_3 first_plane; // Plane fitted to the first polygon of the group.
+    Plane_3 plane; // Plane fitted to the vertices of the polygons inserted together with the first polygon of the group.
+  };
+  std::vector<Coplanar_group> m_coplanar_groups;
+  std::vector<typename Intersection_kernel::Plane_3> m_planes; // Plane of each group in m_coplanar_groups.
+  std::vector<std::size_t> m_input_plane_indices; // Index into m_planes for each inserted polygon, std::size_t(-1) for dropped degenerate polygons.
+  std::vector<std::size_t> m_input2regularized; // Mapping from inserted polygons to the input polygons of the partition, std::size_t(-1) for dropped degenerate polygons.
   std::vector<std::vector<std::size_t> > m_regularized2input; // Mapping from partitioning planes to original input polygons.
   std::unique_ptr<Octree> m_octree;
   std::vector<std::size_t> m_node2partition;
@@ -247,7 +271,8 @@ private:
   std::vector<Index> m_volumes;
   std::map<Index, std::size_t> m_index2volume;
 
-  std::set<Index> duplicates;
+  bool m_kinetic_data_initialized = false; // True if initialize() created the kinetic data structures of all octree leaves.
+
 
 public:
   /// \name Initialization
@@ -299,7 +324,7 @@ public:
   an instance of `PointRange` with 3D points and corresponding 3D normal vectors
 
   \param polygons
-  a range of non-coplanar polygons defined by a range of indices into `points`
+  a range of polygons defined by a range of indices into `points`
 
   \param np
   a sequence of \ref bgl_namedparameters "Named Parameters" among the ones listed below
@@ -326,7 +351,7 @@ public:
       \cgalParamDefault{false}
     \cgalParamNEnd
     \cgalParamNBegin{bbox_dilation_ratio}
-      \cgalParamDescription{Factor for extension of the bounding box of the input data to be used for the partition.}
+      \cgalParamDescription{Factor for extension of the bounding box of the input data to be used for the partition. Must be larger than 1.0.}
       \cgalParamType{FT}
       \cgalParamDefault{1.1}
     \cgalParamNEnd
@@ -362,7 +387,16 @@ public:
   }
 
   /*!
-  \brief inserts non-coplanar polygons, requires `initialize()` afterwards to have effect.
+  \brief inserts polygons, requires `initialize()` or `init_and_partition()` afterwards to have effect.
+
+  A plane is fitted to the vertices of each polygon and the polygon is replaced by the convex hull of its vertices projected onto the plane.
+  Polygons that are coplanar up to a small tolerance relative to their extent get the same plane, which is fitted to the vertices of all of them.
+  This avoids very thin volumes between nearly coplanar polygons.
+  Degenerate polygons, i.e., polygons with less than three vertices or with collinear vertices, are dropped.
+
+  Coplanar polygons share a support plane in the partition and expand separately. Pieces of several coplanar polygons that lie in the same face of
+  the arrangement of the intersection lines within the support plane at the beginning are merged into their convex hull. A face of the partition
+  originating from several coplanar polygons refers to one of them as its input polygon, see `get_linear_cell_complex()`.
 
   \tparam PointRange
   must be a model of `ConstRange` whose iterator type is `RandomAccessIterator` and whose value type is `GeomTraits::Point_3`.
@@ -377,7 +411,7 @@ public:
   an instance of `PointRange` with 3D points
 
   \param polygons
-  a range of non-coplanar polygons defined by a range of indices into `points`
+  a range of polygons defined by a range of indices into `points`
 
   \param np
   a sequence of \ref bgl_namedparameters "Named Parameters" among the ones listed below
@@ -401,45 +435,70 @@ public:
 
     static_assert(std::is_same_v<typename NP_helper::Geom_traits, Kernel>);
 
-    bool verbose = parameters::choose_parameter(parameters::get_parameter(np, internal_np::verbose), m_parameters.verbose);
-
     PointMap point_map = NP_helper::get_point_map(np);
 
-    To_exact to_exact;
     std::size_t offset = m_input2regularized.size();
 
-    for (std::size_t p = 0; p < polygons.size();p++) {
-      auto& poly = polygons[p];
+    std::vector<std::vector<Point_3> > polygon_points(polygons.size());
+    for (std::size_t p = 0; p < polygons.size(); p++) {
+      polygon_points[p].reserve(polygons[p].size());
+      for (auto it : polygons[p])
+        polygon_points[p].push_back(get(point_map, *(points.begin() + it)));
+    }
 
-      std::vector<Point_3> pts;
-      pts.reserve(poly.size());
-      for (auto it : poly)
-        pts.push_back(get(point_map, *(points.begin() + it)));
-      Plane_3 pl;
-      Point_2 c;
-      std::vector<Point_2> ch;
-      process_input_polygon(pts, pl, c, ch);
-      typename Intersection_kernel::Plane_3 exact_pl = to_exact(pl);
-
-      // Check if there is already a coplanar polygon inserted
-      bool skip = false;
-      for (std::size_t i = 0; i < m_input_planes.size(); i++) {
-        if (m_input_planes[i] == exact_pl) {
-          if (verbose)
-            std::cout << i << ". input polygon is coplanar to " << (p + offset) << ". input polygon" << std::endl;
-          skip = true;
-          break;
-        }
-      }
-
-      if (skip)
+    // Polygons that are coplanar up to a tolerance are grouped. The polygons of a group share the plane fitted to the vertices
+    // of all of them. Nearly coplanar polygons would otherwise create very thin volumes.
+    // A polygon that is coplanar to a group of a former call of insert() uses the plane of that group.
+    const std::size_t first_new_group = m_coplanar_groups.size();
+    std::vector<std::size_t> group(polygons.size(), std::size_t(-1));
+    for (std::size_t p = 0; p < polygons.size(); p++) {
+      std::array<IkPoint_3, 3> span;
+      // Degenerate polygons, i.e., with less than three vertices or collinear vertices, are dropped.
+      if (!spanning_points(polygon_points[p], span))
         continue;
 
+      Plane_3 pl;
+      CGAL::linear_least_squares_fitting_3(polygon_points[p].begin(), polygon_points[p].end(), pl, CGAL::Dimension_tag<0>());
+
+      for (std::size_t g = 0; g < m_coplanar_groups.size() && group[p] == std::size_t(-1); g++)
+        if (nearly_coplanar(polygon_points[p], pl, m_coplanar_groups[g].points, m_coplanar_groups[g].first_plane))
+          group[p] = g;
+
+      if (group[p] == std::size_t(-1)) {
+        group[p] = m_coplanar_groups.size();
+        m_coplanar_groups.push_back(Coplanar_group{ polygon_points[p], pl, pl });
+      }
+    }
+
+    std::vector<std::vector<Point_3> > group_points(m_coplanar_groups.size() - first_new_group);
+    for (std::size_t p = 0; p < polygons.size(); p++)
+      if (group[p] != std::size_t(-1) && group[p] >= first_new_group)
+        std::copy(polygon_points[p].begin(), polygon_points[p].end(), std::back_inserter(group_points[group[p] - first_new_group]));
+
+    To_exact to_exact;
+    for (std::size_t g = 0; g < group_points.size(); g++) {
+      CGAL::linear_least_squares_fitting_3(group_points[g].begin(), group_points[g].end(), m_coplanar_groups[first_new_group + g].plane, CGAL::Dimension_tag<0>());
+      m_planes.push_back(to_exact(m_coplanar_groups[first_new_group + g].plane));
+    }
+
+    for (std::size_t p = 0; p < polygons.size(); p++) {
+      if (group[p] == std::size_t(-1)) {
+        m_input2regularized.push_back(std::size_t(-1));
+        m_input_plane_indices.push_back(std::size_t(-1));
+        continue;
+      }
+
+      const Plane_3& pl = m_coplanar_groups[group[p]].plane;
+
+      std::vector<Point_2> ch;
+      process_input_polygon(polygon_points[p], pl, ch);
+
+      // Coplanar input polygons are inserted separately. They share a support plane in the kinetic partition.
       m_input2regularized.push_back(m_input_planes.size());
       m_regularized2input.push_back(std::vector<std::size_t>());
-      m_regularized2input.back().push_back(p);
-      m_input_planes.push_back(exact_pl);
-      m_input_centroids.push_back(c);
+      m_regularized2input.back().push_back(p + offset);
+      m_input_planes.push_back(m_planes[group[p]]);
+      m_input_plane_indices.push_back(group[p]);
       m_input_polygons.push_back(std::vector<Point_3>(ch.size()));
 
       for (std::size_t i = 0; i < ch.size(); i++)
@@ -448,7 +507,17 @@ public:
   }
 
   /*!
-  \brief initializes the kinetic partition of the bounding box.
+  \brief initializes the kinetic partition.
+
+  The input polygons are separated using an octree. Afterwards, the kinetic data structure of each octree leaf is initialized.
+  The leaves are initialized independently and, if `ConcurrencyTag` is `Parallel_tag`, in parallel.
+
+  The initialized kinetic data structures are kept. Hence, `partition()` can be called several times afterwards, e.g., with different values of `k`, without initializing again.
+
+  \note The initialized kinetic data structures of all octree leaves exist at the same time. If only a single partition is needed,
+  `init_and_partition()` has a considerably lower memory consumption.
+
+  \tparam ConcurrencyTag enables sequential versus parallel algorithm. Possible values are `Sequential_tag`, `Parallel_tag`, and `Parallel_if_available_tag`.
 
   \tparam NamedParameters
   a sequence of \ref bgl_namedparameters "Named Parameters"
@@ -464,7 +533,7 @@ public:
       \cgalParamDefault{false}
     \cgalParamNEnd
     \cgalParamNBegin{bbox_dilation_ratio}
-      \cgalParamDescription{Factor for extension of the bounding box of the input data to be used for the partition.}
+      \cgalParamDescription{Factor for extension of the bounding box of the input data to be used for the partition. Must be larger than 1.0.}
       \cgalParamType{FT}
       \cgalParamDefault{1.1}
     \cgalParamNEnd
@@ -482,225 +551,181 @@ public:
 
   \pre input data has been provided via `insert()`.
   */
-
-  template<
+  template<typename ConcurrencyTag = Parallel_if_available_tag,
     typename NamedParameters = parameters::Default_named_parameters>
   void initialize(
     const NamedParameters& np = CGAL::parameters::default_values()) {
-    Timer timer;
-    m_parameters.bbox_dilation_ratio = parameters::choose_parameter(
-      parameters::get_parameter(np, internal_np::bbox_dilation_ratio), FT(11) / FT(10));
-    m_parameters.reorient_bbox = parameters::choose_parameter(
-      parameters::get_parameter(np, internal_np::reorient_bbox), false);
-    m_parameters.max_octree_depth = parameters::choose_parameter(
-      parameters::get_parameter(np, internal_np::max_octree_depth), 3);
-    m_parameters.max_octree_node_size = parameters::choose_parameter(
-      parameters::get_parameter(np, internal_np::max_octree_node_size), 40);
+#ifndef CGAL_LINKED_WITH_TBB
+    static_assert (!std::is_convertible<ConcurrencyTag, Parallel_tag>::value,
+                   "Parallel_tag is enabled but TBB is unavailable.");
+#endif
 
-    std::cout.precision(17);
-    if (m_input_polygons.size() == 0) {
-      if (m_parameters.verbose) {
-        std::cout << "Warning: Your input is empty!";
-      }
+    release_kinetic_data();
+    clear_partition();
+
+    if (!create_subpartitions(np))
+      return;
+
+    FT initialization_time = 0;
+    if (!initialize_subpartitions<ConcurrencyTag>(initialization_time)) {
+      release_kinetic_data();
       return;
     }
 
-    std::set<std::size_t> n;
-    for (auto p : m_input2regularized)
-      n.insert(p);
+    m_kinetic_data_initialized = true;
 
-    CGAL_assertion(m_regularized2input.size() == m_input_polygons.size());
-    CGAL_assertion(m_regularized2input.size() == n.size());
-
-    if (m_parameters.bbox_dilation_ratio < FT(1)) {
-      CGAL_warning_msg(m_parameters.bbox_dilation_ratio >= FT(1),
-        "Warning: You set enlarge_bbox_ratio < 1.0! The valid range is [1.0, +inf). Setting to 1.0!");
-      m_parameters.bbox_dilation_ratio = FT(1);
-    }
-
-    if (m_parameters.verbose) {
-      //const std::string is_reorient = (m_parameters.reorient ? "true" : "false");
-
-      std::cout << std::endl << "--- PARTITION OPTIONS: " << std::endl;
-      std::cout << "* enlarge bbox ratio: " << m_parameters.bbox_dilation_ratio << std::endl;
-    }
-
-    if (m_parameters.verbose) {
-      std::cout << std::endl << "--- INITIALIZING PARTITION:" << std::endl;
-
-      // Initialization.
-      timer.reset();
-      timer.start();
-    }
-
-    if (m_parameters.debug) {
-      for (std::size_t i = 0; i < m_input_polygons.size(); i++)
-        KSP_3::internal::dump_polygon<GeomTraits>(m_input_polygons[i], std::to_string(i) + "-input_polygon");
-    }
-
-    split_octree();
-    m_partitions.resize(m_partition_nodes.size());
-    std::iota(m_partitions.begin(), m_partitions.end(), 0);
-
-    for (std::size_t idx : m_partitions) {
-      Sub_partition& partition = m_partition_nodes[idx];
-      partition.index = idx;
-
-      partition.m_data = std::make_shared<Data_structure>(m_parameters, std::to_string(idx) + "-");
-
-      Initializer initializer(partition.clipped_polygons, partition.m_input_planes, *partition.m_data, m_parameters, m_partitions.size() != 1);
-      initializer.initialize(partition.bbox, partition.input_polygons);
-    }
-
-    // Timing.
-    if (m_parameters.verbose) {
-      const double time_to_initialize = timer.time();
-      std::cout << "* initialization time: " << time_to_initialize << std::endl;
-    }
+    if (m_parameters.verbose)
+      std::cout << "* initialization time of kinetic data structures: " << initialization_time << std::endl;
   }
 
   /*!
   \brief propagates the kinetic polygons in the initialized partition.
 
+  The kinetic partitions of the octree leaves are computed independently and, if `ConcurrencyTag` is `Parallel_tag`, in parallel.
+  The kinetic data structures initialized by `initialize()` are restored after the propagation of each leaf. Hence, `partition()` can be called several times with different values of `k`.
+  The result of a previous call is replaced.
+
+  \note In the parallel version, the state of several kinetic data structures is copied at the same time, one per running thread.
+  Thus, the memory consumption is higher than in the sequential version.
+
+  \tparam ConcurrencyTag enables sequential versus parallel algorithm. Possible values are `Sequential_tag`, `Parallel_tag`, and `Parallel_if_available_tag`.
+
   \param k
    maximum number of allowed intersections for each vertex of the polygon before its expansion stops.
 
-  \pre initialized partition and `k != 0`
+  \pre `initialize()` has been called and `k != 0`
   */
+  template<typename ConcurrencyTag = Parallel_if_available_tag>
   void partition(std::size_t k) {
     FT a, b, c;
-    partition(k, a, b, c);
+    partition<ConcurrencyTag>(k, a, b, c);
   }
 
 #ifndef DOXYGEN_RUNNING
+  template<typename ConcurrencyTag = Parallel_if_available_tag>
   void partition(std::size_t k, FT& partition_time, FT& finalization_time, FT& conformal_time) {
-    if (!m_volumes.empty()) {
-      for (Sub_partition& node : m_partition_nodes) {
-        node.m_data->reset_to_initialization();
-        node.face_neighbors.clear();
-        node.face2vertices.clear();
-        node.volumes.clear();
-      }
-      m_volumes.clear();
-    }
-    Timer timer;
-    timer.start();
+#ifndef CGAL_LINKED_WITH_TBB
+    static_assert (!std::is_convertible<ConcurrencyTag, Parallel_tag>::value,
+                   "Parallel_tag is enabled but TBB is unavailable.");
+#endif
+
     partition_time = 0;
     finalization_time = 0;
     conformal_time = 0;
 
-    for (std::size_t idx : m_partitions) {
-      Sub_partition& partition = m_partition_nodes[idx];
-      timer.reset();
-      std::cout.precision(20);
-
-      // Already initialized?
-      if (partition.m_data->number_of_support_planes() < 6) {
-        if (m_parameters.verbose) {
-          std::cout << "Kinetic partition not initialized or empty. Number of support planes: " << partition.m_data->number_of_support_planes() << std::endl;
-        }
-        return;
-      }
-
-      if (m_parameters.verbose) {
-        std::cout << std::endl << "--- RUNNING THE QUEUE:" << std::endl;
-        std::cout << "* propagation started" << std::endl;
-      }
-
-      // Propagation.
-      Propagation propagation(*partition.m_data, m_parameters);
-      propagation.propagate(k);
-
-      partition_time += timer.time();
-
-      if (m_parameters.verbose) {
-        std::cout << "events in partition " << idx << ": " << propagation.handled_events << std::endl;
-        std::cout << "* propagation finished" << std::endl;
-      }
-
-      if (m_parameters.verbose) {
-        std::cout << std::endl << "--- FINALIZING PARTITION:" << std::endl;
-      }
-
-      // Finalization.
-
-      for (std::size_t i = 0; i < partition.m_data->number_of_support_planes(); i++)
-        if (!partition.m_data->support_plane(i).mesh().is_valid(true))
-          if (m_parameters.verbose)
-            std::cout << i << ". support has an invalid mesh!" << std::endl;
-
-      Finalizer finalizer(*partition.m_data, m_parameters);
-
-      if (m_parameters.verbose)
-        std::cout << "* getting volumes ..." << std::endl;
-
-      finalizer.create_polyhedra();
-      finalization_time += timer.time();
-
-      if (m_parameters.verbose)
-        std::cout << idx << ". partition with " << partition.input_polygons.size() << " input polygons split into " << partition.m_data->number_of_volumes() << " volumes" << std::endl;
+    if (!m_kinetic_data_initialized) {
+      std::cout << "Warning: initialize() has to be called before partition()!" << std::endl;
+      return;
     }
 
-    // Convert face_neighbors to pair<Index, Index>
-    for (std::size_t i = 0; i < m_partitions.size(); i++) {
-      Sub_partition& partition = m_partition_nodes[m_partitions[i]];
+    clear_partition();
 
-      for (std::size_t j = 0; j < partition.m_data->number_of_volumes(); j++) {
-        m_volumes.push_back(std::make_pair(m_partitions[i], j));
-      }
+    FT initialization_time = 0;
+    if (!compute_subpartitions<ConcurrencyTag>(k, false, initialization_time, partition_time, finalization_time))
+      return;
 
-      partition.face_neighbors.resize(partition.m_data->face_to_volumes().size());
-      for (std::size_t j = 0; j < partition.m_data->face_to_volumes().size(); j++) {
-        auto& p = partition.m_data->face_to_volumes()[j];
-        partition.face_neighbors[j] = std::make_pair(Index(m_partitions[i], p.first), Index(m_partitions[i], p.second));
-      }
+    merge_subpartitions(conformal_time);
+  }
+#endif
 
-      partition.face2vertices.resize(partition.m_data->face_to_vertices().size());
+  /*!
+  \brief initializes the kinetic partition and propagates the kinetic polygons.
 
-      for (std::size_t j = 0; j < partition.m_data->face_to_vertices().size(); j++) {
-        partition.face2vertices[j].resize(partition.m_data->face_to_vertices()[j].size());
-        for (std::size_t k = 0; k < partition.m_data->face_to_vertices()[j].size(); k++)
-          partition.face2vertices[j][k] = std::make_pair(m_partitions[i], partition.m_data->face_to_vertices()[j][k]);
-      }
+  The input polygons are separated using an octree. Afterwards, the kinetic partition of each octree leaf is computed.
+  Each leaf are computed independently and, if `ConcurrencyTag` is `Parallel_tag`, in parallel.
+
+  In contrast to calling `initialize()` and `partition()`, the kinetic data structure of each leaf is created right before its propagation and released after its finalization.
+  Hence, the memory consumption is considerably lower. To compute another partition, e.g., with a different `k`, `init_and_partition()` has to be called again.
+
+  \note In the parallel version, several kinetic data structures exist at the same time, one per running thread.
+  Thus, the memory consumption is higher than in the sequential version.
+
+  \tparam ConcurrencyTag enables sequential versus parallel algorithm. Possible values are `Sequential_tag`, `Parallel_tag`, and `Parallel_if_available_tag`.
+
+  \tparam NamedParameters
+  a sequence of \ref bgl_namedparameters "Named Parameters"
+
+  \param k
+   maximum number of allowed intersections for each vertex of the polygon before its expansion stops.
+
+  \param np
+  a sequence of \ref bgl_namedparameters "Named Parameters"
+  among the ones listed below
+
+  \cgalNamedParamsBegin
+    \cgalParamNBegin{reorient_bbox}
+      \cgalParamDescription{Use the oriented bounding box instead of the axis-aligned bounding box. While the z direction is maintained, the x axis is aligned with the largest variation in the horizontal plane.}
+      \cgalParamType{bool}
+      \cgalParamDefault{false}
+    \cgalParamNEnd
+    \cgalParamNBegin{bbox_dilation_ratio}
+      \cgalParamDescription{Factor for extension of the bounding box of the input data to be used for the partition. Must be larger than 1.0.}
+      \cgalParamType{FT}
+      \cgalParamDefault{1.1}
+    \cgalParamNEnd
+    \cgalParamNBegin{max_octree_depth}
+      \cgalParamDescription{The maximal depth of the octree for subdividing the kinetic partition before initialization.}
+      \cgalParamType{std::size_t}
+      \cgalParamDefault{3}
+    \cgalParamNEnd
+    \cgalParamNBegin{max_octree_node_size}
+      \cgalParamDescription{A node in the octree is only split if the contained number of primitives is larger and the maximal depth is not yet reached.}
+      \cgalParamType{std::size_t}
+      \cgalParamDefault{40}
+    \cgalParamNEnd
+  \cgalNamedParamsEnd
+
+  \pre input data has been provided via `insert()` and `k != 0`.
+  */
+  template<typename ConcurrencyTag = Parallel_if_available_tag,
+    typename NamedParameters = parameters::Default_named_parameters>
+  void init_and_partition(std::size_t k,
+    const NamedParameters& np = CGAL::parameters::default_values()) {
+    FT a, b, c;
+    init_and_partition<ConcurrencyTag>(k, a, b, c, np);
+  }
+
+#ifndef DOXYGEN_RUNNING
+  template<typename ConcurrencyTag = Parallel_if_available_tag,
+    typename NamedParameters = parameters::Default_named_parameters>
+  void init_and_partition(std::size_t k, FT& partition_time, FT& finalization_time, FT& conformal_time,
+    const NamedParameters& np = CGAL::parameters::default_values()) {
+#ifndef CGAL_LINKED_WITH_TBB
+    static_assert (!std::is_convertible<ConcurrencyTag, Parallel_tag>::value,
+                   "Parallel_tag is enabled but TBB is unavailable.");
+#endif
+
+    partition_time = 0;
+    finalization_time = 0;
+    conformal_time = 0;
+
+    release_kinetic_data();
+    clear_partition();
+
+    if (!create_subpartitions(np))
+      return;
+
+    FT initialization_time = 0;
+    CGAL::Real_timer t1;
+    t1.start();
+    if (!compute_subpartitions<ConcurrencyTag>(k, true, initialization_time, partition_time, finalization_time))
+      return;
+    t1.stop();
+    std::cout << "p: " << t1.time() << "\n";
+    if (m_parameters.verbose) {
+      std::cout << "* initialization time of kinetic data structures: " << initialization_time << "\n";
+      std::cout << "* partition time: " << partition_time << "\n";
+      std::cout << "* finalization time: " << finalization_time << "\n";
     }
 
-    for (std::size_t i = 0; i < m_volumes.size(); i++)
-      m_index2volume[m_volumes[i]] = i;
-
-    std::map<typename Intersection_kernel::Point_3, Index> pts2idx;
-
-    for (std::size_t i = 0; i < number_of_volumes(); i++) {
-      std::vector<Index> f1;
-      faces(i, std::back_inserter(f1));
-      for (const Index& f : f1) {
-        std::vector<Index>& face = m_partition_nodes[f.first].face2vertices[f.second];
-        for (std::size_t j = 0; j < face.size(); j++) {
-          auto it = pts2idx.emplace(m_partition_nodes[face[j].first].m_data->exact_vertices()[face[j].second], face[j]);
-          if (!it.second)
-            face[j] = it.first->second;
-        }
-      }
-    }
-
-    timer.stop();
-
-    timer.reset();
-    timer.start();
-    make_conformal(0);
-    conformal_time = timer.time();
-
-    // Clear unused data structures
-    for (std::size_t i = 0; i < m_partitions.size(); i++) {
-      m_partition_nodes[i].m_data->pface_neighbors().clear();
-      m_partition_nodes[i].m_data->face_to_vertices().clear();
-      m_partition_nodes[i].m_data->face_to_index().clear();
-      m_partition_nodes[i].m_data->face_to_volumes().clear();
-    }
+    t1.reset();
+    t1.start();
+    merge_subpartitions(conformal_time);
+    t1.stop();
+    std::cout << "c: " << t1.time() << std::endl;
 
     if (m_parameters.verbose)
-      std::cout << "ksp v: " << m_partition_nodes[0].m_data->vertices().size() << " f: " << m_partition_nodes[0].face2vertices.size() << " vol: " << m_volumes.size() << std::endl;
-
-    return;
+      std::cout << "* conformal time: " << conformal_time << std::endl;
   }
 #endif
   /// @}
@@ -722,7 +747,10 @@ public:
   }
 
   /*!
-  \brief provides the support planes of the partition derived from the input polygons
+  \brief provides the planes of the input polygons.
+
+  Polygons that are coplanar up to a small tolerance share a plane. Thus, each plane occurs only once.
+  The planes are indexed by `input_plane_indices()` and by the input plane index stored in the face attributes of the linear cell complex, see `get_linear_cell_complex()`.
 
   @return
    vector of planes.
@@ -730,13 +758,29 @@ public:
   \pre inserted polygons
   */
   const std::vector<typename Intersection_kernel::Plane_3> &input_planes() const {
-    return m_input_planes;
+    return m_planes;
+  }
+
+  /*!
+  \brief provides the index of the plane of each input polygon into `input_planes()`.
+
+  Polygons that are coplanar up to a small tolerance share a plane and thus have the same index.
+  Degenerate polygons, i.e., polygons with less than three vertices or with collinear vertices, are dropped when inserted. Their index is `std::size_t(-1)`.
+
+  @return
+   vector of plane indices, one for each inserted polygon.
+
+  \pre inserted polygons
+  */
+  const std::vector<std::size_t>& input_plane_indices() const {
+    return m_input_plane_indices;
   }
 
   /*!
    \brief exports the kinetic partition into a `Linear_cell_complex_for_combinatorial_map<3, 3>` using a model of `KineticLCCItems` as items, e.g., `Kinetic_linear_cell_complex_min_items`.
 
    Volume and face attributes defined in the model `KineticLCCItems` are filled. The volume index is in the range [0, number of volumes -1]
+   The input polygon index of a face refers to the input polygon the face originates from. If the face originates from several coplanar input polygons, one of them is provided.
 
    \tparam LCC must be a model of `Linear_cell_complex_for_combinatorial_map<3, 3>` using a model of `KineticLCCItems`.
 
@@ -798,7 +842,8 @@ public:
     std::vector<bool> added_volumes(number_of_volumes(), false);
 
     std::deque<std::size_t> queue;
-    queue.push_back(0);
+    if (number_of_volumes() > 0)
+      queue.push_back(0);
 
     bool first = true;
     while (!queue.empty()) {
@@ -814,10 +859,18 @@ public:
 
       faces(v, std::back_inserter(faces_of_volume));
 
-      IkPoint_3 centroid = to_exact(m_partition_nodes[m_volumes[v].first].m_data->volumes()[m_volumes[v].second].centroid);
+      IkPoint_3 centroid = to_exact(m_partition_nodes[m_volumes[v].first].volumes[m_volumes[v].second].centroid);
 
       std::vector<bool> face_added(faces_of_volume.size(), false);
       std::vector<std::vector<Index> > vtx_of_faces(faces_of_volume.size());
+
+      // All vertices of the volume, used to orient its faces exactly.
+      std::vector<std::size_t> vtx_of_volume;
+      for (std::size_t i = 0; i < faces_of_volume.size(); i++) {
+        vertex_indices(faces_of_volume[i], std::back_inserter(vtx_of_faces[i]));
+        for (const Index& vi : vtx_of_faces[i])
+          vtx_of_volume.push_back(mapped_vertices[vi]);
+      }
 
       std::queue<std::size_t> face_queue;
       for (std::size_t i = 0;i<faces_of_volume.size();i++)
@@ -831,7 +884,7 @@ public:
           vertex_indices(faces_of_volume[j], std::back_inserter(vtx_of_faces[j]));
 
         if (first) {
-          add_face_to_lcc(lcc, ib, faces_of_volume[j], vtx_of_faces[j], centroid, mapped_vertices, vtx, used_vertices);
+          add_face_to_lcc(lcc, ib, faces_of_volume[j], vtx_of_faces[j], vtx_of_volume, mapped_vertices, vtx, used_vertices);
 
           // Add neighboring faces to queue
           auto pair = neighbors(faces_of_volume[j]);
@@ -847,7 +900,7 @@ public:
         }
         else {
           if (face_queue.size() <= 3 || can_add_face_to_lcc(vtx_of_faces[j], mapped_vertices, used_vertices)) {
-            add_face_to_lcc(lcc, ib, faces_of_volume[j], vtx_of_faces[j], centroid, mapped_vertices, vtx, used_vertices);
+            add_face_to_lcc(lcc, ib, faces_of_volume[j], vtx_of_faces[j], vtx_of_volume, mapped_vertices, vtx, used_vertices);
 
             // Add neighboring faces to queue
             auto pair = neighbors(faces_of_volume[j]);
@@ -928,12 +981,6 @@ private:
     Index vA, vB;
   };
 
-  const Point_3& volume_centroid(std::size_t volume_index) const {
-    CGAL_assertion(volume_index < m_volumes.size());
-    auto p = m_volumes[volume_index];
-    return m_partition_nodes[p.first].m_data->volumes()[p.second].centroid;
-  }
-
 
   /*!
   \brief Face indices of the volume.
@@ -953,7 +1000,7 @@ private:
     CGAL_assertion(m_volumes.size() > volume_index);
     auto p = m_volumes[volume_index];
 
-    for (std::size_t i : m_partition_nodes[p.first].m_data->volumes()[p.second].faces)
+    for (std::size_t i : m_partition_nodes[p.first].volumes[p.second].faces)
       *it++ = std::make_pair(p.first, i);
   }
 
@@ -966,19 +1013,7 @@ private:
     \pre created partition
   */
   const Point_3& vertex(const Index& vertex_index) const {
-    return m_partition_nodes[vertex_index.first].m_data->vertices()[vertex_index.second];
-  }
-
-  /*!
-  \brief Mapping of a vertex index to its exact position.
-
-  @return
-   vector of points.
-
-    \pre created partition
-  */
-  const typename Intersection_kernel::Point_3& exact_vertex(const Index& vertex_index) const {
-    return m_partition_nodes[vertex_index.first].m_data->exact_vertices()[vertex_index.second];
+    return m_partition_nodes[vertex_index.first].vertices[vertex_index.second];
   }
 
   /*!
@@ -996,7 +1031,7 @@ private:
   template<class OutputIterator>
   void vertices(const Index& face_index, OutputIterator it) const {
     for (auto& p : m_partition_nodes[face_index.first].face2vertices[face_index.second])
-      *it++ = m_partition_nodes[p.first].m_data->vertices()[p.second];
+      *it++ = m_partition_nodes[p.first].vertices[p.second];
   }
 
   template<class OutputIterator>
@@ -1021,51 +1056,15 @@ private:
   void exact_vertices(const Index& face_index, OutputIterator it) const {
 
     for (auto& p : m_partition_nodes[face_index.first].face2vertices[face_index.second])
-      *it++ = m_partition_nodes[p.first].m_data->exact_vertices()[p.second];
+      *it++ = m_partition_nodes[p.first].exact_vertices[p.second];
   }
 
   template<class OutputIterator, class IndexOutputIterator>
   void exact_vertices(const Index& face_index, OutputIterator pit, IndexOutputIterator iit) const {
     for (auto& p : m_partition_nodes[face_index.first].face2vertices[face_index.second]) {
       *iit++ = p;
-      *pit++ = m_partition_nodes[p.first].m_data->exact_vertices()[p.second];
+      *pit++ = m_partition_nodes[p.first].exact_vertices[p.second];
     }
-  }
-
-  template<class OutputIterator>
-  void faces_of_input_polygon(const std::size_t polygon_index, OutputIterator it) const {
-    if (polygon_index >= m_input_planes.size()) {
-      CGAL_assertion(false);
-    }
-
-    for (std::size_t idx : m_partitions) {
-      const Sub_partition& p = m_partition_nodes[idx];
-      // Check if it contains this input polygon and get support plane index
-      int sp_idx = -1;
-      for (std::size_t i = 0; i < p.input_polygons.size(); i++) {
-        if (p.input_polygons[i] == polygon_index) {
-          sp_idx = p.m_data->support_plane_index(i);
-          break;
-        }
-      }
-
-      // Continue if the partition does not contain this input polygon.
-      if (sp_idx == -1)
-        continue;
-
-      auto pfaces = p.m_data->pfaces(sp_idx);
-      auto f2i = p.m_data->face_to_index();
-      const auto& f2sp = p.m_data->face_to_support_plane();
-
-      for (std::size_t i = 0; i < f2sp.size(); i++) {
-        if (f2sp[i] == sp_idx)
-          *it++ = std::make_pair(idx, i);
-      }
-    }
-  }
-
-  const std::vector<std::vector<std::size_t> >& input_mapping() const {
-    return m_regularized2input;
   }
 
   /*!
@@ -1102,27 +1101,79 @@ private:
     }
   }
 
-  void process_input_polygon(const std::vector<Point_3> poly, Plane_3& pl, Point_2& c, std::vector<Point_2>& ch) const {
-    CGAL::linear_least_squares_fitting_3(poly.begin(), poly.end(), pl, CGAL::Dimension_tag<0>());
-
+  // Computes the convex hull of the polygon projected onto the plane pl.
+  void process_input_polygon(const std::vector<Point_3>& poly, const Plane_3& pl, std::vector<Point_2>& ch) const {
     std::vector<Point_2> pts2d(poly.size());
     for (std::size_t i = 0; i < poly.size(); i++)
       pts2d[i] = pl.to_2d(poly[i]);
 
     ch.clear();
     CGAL::convex_hull_2(pts2d.begin(), pts2d.end(), std::back_inserter(ch));
+  }
 
-    // Centroid
-    FT x = 0, y = 0, w = 0;
-    for (std::size_t i = 2; i < ch.size(); i++) {
-      Triangle_2 tri(ch[0], ch[i - 1], ch[i]);
-      w += CGAL::area(ch[0], ch[i - 1], ch[i]);
-      Point_2 c = CGAL::centroid(ch[0], ch[i - 1], ch[i]);
-      x += c.x() * w;
-      y += c.y() * w;
+  // Provides three points of the polygon that are not collinear. The points are chosen to span a large triangle.
+  bool spanning_points(const std::vector<Point_3>& poly, std::array<IkPoint_3, 3>& span) const {
+    if (poly.size() < 3)
+      return false;
+
+    std::size_t a = 0, b = 0, c = 0;
+    FT max_dist = -1, max_area = -1;
+    for (std::size_t i = 1; i < poly.size(); i++) {
+      const FT d = CGAL::squared_distance(poly[a], poly[i]);
+      if (d > max_dist) {
+        max_dist = d;
+        b = i;
+      }
+    }
+    for (std::size_t i = 0; i < poly.size(); i++) {
+      const FT area = CGAL::cross_product(poly[b] - poly[a], poly[i] - poly[a]).squared_length();
+      if (area > max_area) {
+        max_area = area;
+        c = i;
+      }
     }
 
-    c = Point_2(x / w, y / w);
+    To_exact to_exact;
+    span = { to_exact(poly[a]), to_exact(poly[b]), to_exact(poly[c]) };
+    return !CGAL::collinear(span[0], span[1], span[2]);
+  }
+
+  // Checks whether two polygons are coplanar up to a tolerance relative to their extent, i.e.,
+  // whether each vertex of a polygon is close to the plane fitted to the other polygon.
+  bool nearly_coplanar(const std::vector<Point_3>& a, const Plane_3& plane_a, const std::vector<Point_3>& b, const Plane_3& plane_b) const {
+    // Relative tolerance. Smaller deviations lead to very thin volumes in the kinetic partition.
+    const FT tolerance = FT(1e-6);
+
+    FT min[3], max[3];
+    for (std::size_t d = 0; d < 3; d++) {
+      min[d] = max[d] = a[0][d];
+      for (const Point_3& p : a) {
+        min[d] = (std::min)(min[d], p[d]);
+        max[d] = (std::max)(max[d], p[d]);
+      }
+      for (const Point_3& p : b) {
+        min[d] = (std::min)(min[d], p[d]);
+        max[d] = (std::max)(max[d], p[d]);
+      }
+    }
+    const FT sq_extent = CGAL::square(max[0] - min[0]) + CGAL::square(max[1] - min[1]) + CGAL::square(max[2] - min[2]);
+    const FT sq_tolerance = CGAL::square(tolerance) * sq_extent;
+
+    // Squared distance of p to the plane without requiring a distance functor of the traits.
+    auto sq_distance = [](const Point_3& p, const Plane_3& pl) {
+      const FT v = pl.a() * p.x() + pl.b() * p.y() + pl.c() * p.z() + pl.d();
+      return CGAL::square(v) / (CGAL::square(pl.a()) + CGAL::square(pl.b()) + CGAL::square(pl.c()));
+    };
+
+    for (const Point_3& p : a)
+      if (sq_distance(p, plane_b) > sq_tolerance)
+        return false;
+
+    for (const Point_3& p : b)
+      if (sq_distance(p, plane_a) > sq_tolerance)
+        return false;
+
+    return true;
   }
 
   std::pair<int, int> make_canonical_pair(int i, int j) {
@@ -1245,97 +1296,6 @@ private:
     }
 
     return area;
-  }
-
-  void check_tjunctions() {
-    std::map<Index, std::vector<Index> > vertex2neighbors;
-
-    for (std::size_t v = 0; v < m_volumes.size(); v++) {
-      auto &vp = m_volumes[v];
-      for (const std::size_t f : m_partition_nodes[vp.first].m_data->volumes()[vp.second].faces) {
-        auto& vtx = m_partition_nodes[vp.first].face2vertices[f];
-        for (std::size_t i = 0; i < vtx.size(); i++) {
-          vertex2neighbors[vtx[i]].push_back(vtx[(i + 1) % vtx.size()]);
-          vertex2neighbors[vtx[i]].push_back(vtx[(i - 1 + vtx.size()) % vtx.size()]);
-        }
-      }
-    }
-
-    for (auto& p : vertex2neighbors) {
-      typename Intersection_kernel::Point_3 a = m_partition_nodes[p.first.first].m_data->exact_vertices()[p.first.second];
-      //Check pairwise collinear
-      for (std::size_t i = 0; i < p.second.size(); i++) {
-        typename Intersection_kernel::Point_3 b = m_partition_nodes[p.second[i].first].m_data->exact_vertices()[p.second[i].second];
-        for (std::size_t j = i + 1; j < p.second.size(); j++) {
-          if (p.second[i] == p.second[j])
-            continue;
-          typename Intersection_kernel::Point_3 c = m_partition_nodes[p.second[j].first].m_data->exact_vertices()[p.second[j].second];
-          if (CGAL::collinear(a, b, c) && ((b - a) * (c - a) > 0)) {
-            std::cout << "non-manifold v (" << p.first.first << ", " << p.first.second << ")" << std::endl;
-            std::cout << " v (" << p.second[i].first << ", " << p.second[i].second << ")" << std::endl;
-            std::cout << " v (" << p.second[j].first << ", " << p.second[j].second << ")" << std::endl;
-
-            From_exact from_exact;
-
-            std::ofstream vout2("a.xyz");
-            vout2.precision(20);
-            vout2 << from_exact(a) << std::endl;
-            vout2.close();
-            std::ofstream vout3("b.xyz");
-            vout3.precision(20);
-            vout3 << from_exact(b) << std::endl;
-            vout3.close();
-            std::ofstream vout4("c.xyz");
-            vout4.precision(20);
-            vout4 << from_exact(c) << std::endl;
-            vout4.close();
-
-            for (std::size_t v = 0; v < m_volumes.size(); v++) {
-              auto& vp = m_volumes[v];
-              for (const std::size_t f : m_partition_nodes[vp.first].m_data->volumes()[vp.second].faces) {
-                auto& vtx = m_partition_nodes[vp.first].face2vertices[f];
-                bool hasa = false, hasb = false, hasc = false;
-                for (std::size_t k = 0; k < vtx.size(); k++) {
-                  if (vtx[k] == p.first)
-                    hasa = true;
-                  if (vtx[k] == p.second[i])
-                    hasb = true;
-                  if (vtx[k] == p.second[j])
-                    hasc = true;
-                }
-
-                if (hasa && (hasb || hasc)) {
-                  const std::string vfilename = std::to_string(v) + " " + std::to_string(f) + "-non_manifold.polylines.txt";
-                  std::ofstream vout(vfilename);
-                  vout.precision(20);
-                  vout << vtx.size() + 1;
-                  for (const auto& v : vtx) {
-                    vout << " " << from_exact(m_partition_nodes[v.first].m_data->exact_vertices()[v.second]);
-                  }
-
-                  vout << " " << from_exact(m_partition_nodes[vtx[0].first].m_data->exact_vertices()[vtx[0].second]);
-
-                  vout << std::endl;
-                  vout.close();
-                }
-              }
-            }
-            std::cout << std::endl;
-          }
-        }
-      }
-    }
-  }
-
-  void insert_map(const Index& a, const Index& b, std::map<Index, Index>& pm) const {
-    if (a == b)
-      return;
-
-    Index target = b;
-    auto it = pm.find(b);
-    if (it != pm.end())
-      target = it->second;
-    pm[a] = target;
   }
 
   void build_cdt(CDTplus& cdt, std::vector<CDTplus>& partitions, std::vector<std::vector<std::vector<Constraint_info> > >& constraints,  const typename Intersection_kernel::Plane_3& plane) {
@@ -1505,12 +1465,360 @@ private:
     return result;
   }
 
+  // Discards the result of a previous partition.
+  void clear_partition() {
+    m_volumes.clear();
+    m_index2volume.clear();
+  }
+
+  // Releases the kinetic data structures kept by initialize().
+  void release_kinetic_data() {
+    for (Sub_partition& partition : m_partition_nodes)
+      partition.m_data.reset();
+
+    m_kinetic_data_initialized = false;
+  }
+
+  // Sets the parameters and separates the input polygons into the leaves of an octree.
+  template<typename NamedParameters>
+  bool create_subpartitions(const NamedParameters& np) {
+    Timer timer;
+    m_parameters.bbox_dilation_ratio = parameters::choose_parameter(
+      parameters::get_parameter(np, internal_np::bbox_dilation_ratio), FT(11) / FT(10));
+    m_parameters.reorient_bbox = parameters::choose_parameter(
+      parameters::get_parameter(np, internal_np::reorient_bbox), false);
+    m_parameters.max_octree_depth = parameters::choose_parameter(
+      parameters::get_parameter(np, internal_np::max_octree_depth), 3);
+    m_parameters.max_octree_node_size = parameters::choose_parameter(
+      parameters::get_parameter(np, internal_np::max_octree_node_size), 40);
+
+    if (m_parameters.bbox_dilation_ratio <= 1.0) {
+      std::cout << "Warning: You set enlarge_bbox_ratio <= 1.0! The valid range is (1.0, +inf). Setting to 1.1!" << std::endl;
+      m_parameters.bbox_dilation_ratio = FT(11) / FT(10);
+    }
+
+    std::cout.precision(17);
+    if (m_input_polygons.size() == 0) {
+      std::cout << "Warning: Your input is empty!" << std::endl;
+      return false;
+    }
+
+    std::set<std::size_t> n;
+    for (auto p : m_input2regularized)
+      if (p != std::size_t(-1))
+        n.insert(p);
+
+    CGAL_assertion(m_regularized2input.size() == m_input_polygons.size());
+    CGAL_assertion(m_regularized2input.size() == n.size());
+
+    if (m_parameters.bbox_dilation_ratio < FT(1)) {
+      CGAL_warning_msg(m_parameters.bbox_dilation_ratio >= FT(1),
+        "Warning: You set enlarge_bbox_ratio < 1.0! The valid range is [1.0, +inf). Setting to 1.0!");
+      m_parameters.bbox_dilation_ratio = FT(1);
+    }
+
+    if (m_parameters.verbose) {
+      //const std::string is_reorient = (m_parameters.reorient ? "true" : "false");
+
+      std::cout << "\n--- PARTITION OPTIONS: \n";
+      std::cout << "* enlarge bbox ratio: " << m_parameters.bbox_dilation_ratio << "\n";
+
+      std::cout << "\n--- CREATING SUBPARTITIONS:" << std::endl;
+
+      // Initialization.
+      timer.reset();
+      timer.start();
+    }
+
+    if (m_parameters.debug) {
+      for (std::size_t i = 0; i < m_input_polygons.size(); i++)
+        KSP_3::internal::dump_polygon<GeomTraits>(m_input_polygons[i], std::to_string(i) + "-input_polygon");
+    }
+
+    if (!split_octree())
+      return false;
+    m_partitions.resize(m_partition_nodes.size());
+    std::iota(m_partitions.begin(), m_partitions.end(), 0);
+
+    for (std::size_t idx : m_partitions)
+      m_partition_nodes[idx].index = idx;
+
+    // Timing.
+    if (m_parameters.verbose) {
+      const double time_to_initialize = timer.time();
+      std::cout << "* octree creation time: " << time_to_initialize << std::endl;
+    }
+
+    return true;
+  }
+
+  // Calls f(i) for each octree leaf m_partitions[i], in parallel if ConcurrencyTag is Parallel_tag.
+  // The leaves are processed in the order of decreasing number of input polygons, so that the most expensive leaves are
+  // started first and do not delay the end of the computation. Each leaf is scheduled separately for the same reason.
+  template<typename ConcurrencyTag, typename Function>
+  void for_each_leaf(const Function& f) const {
+    std::vector<std::size_t> order(m_partitions.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+      return m_partition_nodes[m_partitions[a]].input_polygons.size() > m_partition_nodes[m_partitions[b]].input_polygons.size();
+    });
+
+#ifdef CGAL_LINKED_WITH_TBB
+    if constexpr (std::is_convertible_v<ConcurrencyTag, Parallel_tag>) {
+      tbb::parallel_for(tbb::blocked_range<std::size_t>(0, order.size(), 1), [&](const tbb::blocked_range<std::size_t>& r) {
+        for (std::size_t i = r.begin(); i != r.end(); ++i)
+          f(order[i]);
+      }, tbb::simple_partitioner());
+      return;
+    }
+#endif
+
+    for (std::size_t i : order)
+      f(i);
+  }
+
+  // Initializes the kinetic data structures of all octree leaves.
+  template<typename ConcurrencyTag>
+  bool initialize_subpartitions(FT& initialization_time) {
+    // Times are collected per partition. In the parallel version, they sum up to more than the elapsed time.
+    std::vector<FT> initialization_times(m_partitions.size(), 0);
+    std::atomic<bool> failed(false);
+
+    for_each_leaf<ConcurrencyTag>([&](const std::size_t i) {
+      if (failed)
+        return;
+
+      if (!initialize_subpartition(m_partitions[i], initialization_times[i]))
+        failed = true;
+    });
+
+    initialization_time = std::accumulate(initialization_times.begin(), initialization_times.end(), FT(0));
+
+    return !failed;
+  }
+
+  // Computes the kinetic partitions of all octree leaves.
+  // If init_and_release is true, the kinetic data structure of each leaf is created before and released after its propagation.
+  // Otherwise, the kinetic data structures created by initialize() are used and restored afterwards.
+  template<typename ConcurrencyTag>
+  bool compute_subpartitions(std::size_t k, bool init_and_release, FT& initialization_time, FT& partition_time, FT& finalization_time) {
+    // Times are collected per partition. In the parallel version, they sum up to more than the elapsed time.
+    std::vector<FT> initialization_times(m_partitions.size(), 0), partition_times(m_partitions.size(), 0), finalization_times(m_partitions.size(), 0);
+    std::atomic<bool> failed(false);
+
+    std::cout.precision(17);
+    if (m_parameters.verbose) {
+      if (std::is_same<ConcurrencyTag, Sequential_tag>::value)
+        std::cout << "sequential" << std::endl;
+      else if (std::is_same<ConcurrencyTag, Parallel_tag>::value)
+        std::cout << "parallel" << std::endl;
+    }
+
+    for_each_leaf<ConcurrencyTag>([&](const std::size_t i) {
+      if (failed)
+        return;
+
+      if (!compute_partition(m_partitions[i], k, init_and_release, initialization_times[i], partition_times[i], finalization_times[i])) {
+        failed = true;
+        KSP::internal::Log_line() << "Warning: partition() failed for partition " << i << " " << m_partitions[i];
+      }
+    });
+
+    initialization_time = std::accumulate(initialization_times.begin(), initialization_times.end(), FT(0));
+    partition_time = std::accumulate(partition_times.begin(), partition_times.end(), FT(0));
+    finalization_time = std::accumulate(finalization_times.begin(), finalization_times.end(), FT(0));
+
+    return !failed;
+  }
+
+  // Creates and initializes the kinetic data structure of one octree leaf.
+  // Only accesses data of the given Sub_partition and read-only shared data. Thus, it can be called in parallel for different leaves.
+  bool initialize_subpartition(std::size_t idx, FT& initialization_time) {
+    Sub_partition& partition = m_partition_nodes[idx];
+    // Each line written to std::cout gets the index of the partition as prefix, as partitions may be computed in parallel.
+    const std::string log_prefix = "[P" + std::to_string(idx) + "] ";
+    Timer timer;
+    timer.start();
+
+    partition.m_data = std::make_shared<Data_structure>(std::to_string(idx) + "-", log_prefix);
+
+    Initializer initializer(partition.clipped_polygons, partition.m_input_planes, *partition.m_data, m_parameters, m_partitions.size() != 1);
+    initializer.initialize(partition.bbox, partition.input_polygons);
+
+    // The input of the Initializer is not needed anymore.
+    std::vector<std::vector<typename Intersection_kernel::Point_3> >().swap(partition.clipped_polygons);
+    std::vector<typename Intersection_kernel::Plane_3>().swap(partition.m_input_planes);
+
+    initialization_time = timer.time();
+
+    // Initialization successful?
+    if (partition.m_data->number_of_support_planes() < 6) {
+      KSP::internal::Log_line(log_prefix) << "Kinetic partition not initialized or empty. Number of support planes: " << partition.m_data->number_of_support_planes();
+
+      return false;
+    }
+
+    return true;
+  }
+
+  // Propagates and finalizes the kinetic partition of one octree leaf. If init_and_release is true, the kinetic data structure is
+  // created before and released afterwards. Otherwise, the kinetic data structure is restored to its initialized state afterwards.
+  // Only accesses data of the given Sub_partition and read-only shared data. Thus, it can be called in parallel for different leaves.
+  bool compute_partition(std::size_t idx, std::size_t k, bool init_and_release, FT& initialization_time, FT& partition_time, FT& finalization_time) {
+    Sub_partition& partition = m_partition_nodes[idx];
+    const std::string log_prefix = "[P" + std::to_string(idx) + "] ";
+
+    if (init_and_release) {
+      if (!initialize_subpartition(idx, initialization_time))
+        return false;
+    }
+
+    CGAL_assertion(partition.m_data != nullptr);
+
+    // Propagation and finalization modify the kinetic data structure. Its initialized state is saved to be restored afterwards.
+    typename Data_structure::Initial_state initial_state;
+    if (!init_and_release)
+      initial_state = partition.m_data->save_initial_state();
+
+    Timer timer;
+    timer.start();
+
+    if (m_parameters.verbose) {
+      KSP::internal::Log_line(log_prefix) << "--- RUNNING THE QUEUE:";
+      KSP::internal::Log_line(log_prefix) << "* propagation started";
+    }
+
+    // Propagation.
+    Propagation propagation(*partition.m_data, m_parameters);
+    propagation.propagate(k);
+
+    partition_time = timer.time();
+    timer.reset();
+
+    if (m_parameters.verbose) {
+      KSP::internal::Log_line(log_prefix) << "events in partition: " << propagation.handled_events;
+      KSP::internal::Log_line(log_prefix) << "* propagation finished";
+      KSP::internal::Log_line(log_prefix) << "--- FINALIZING PARTITION:";
+    }
+
+    // Finalization.
+    for (std::size_t i = 0; i < partition.m_data->number_of_support_planes(); i++)
+      if (!partition.m_data->support_plane(i).mesh().is_valid(true))
+        KSP::internal::Log_line(log_prefix) << i << ". support has an invalid mesh!";
+
+    Finalizer finalizer(*partition.m_data, m_parameters);
+
+    if (m_parameters.verbose)
+      KSP::internal::Log_line(log_prefix) << "* getting volumes ...";
+
+    finalizer.create_polyhedra();
+    finalization_time = timer.time();
+
+    if (m_parameters.verbose)
+      KSP::internal::Log_line(log_prefix) << "partition with " << partition.input_polygons.size() << " input polygons split into " << partition.m_data->number_of_volumes() << " volumes";
+
+    extract_finalized_data(partition, idx);
+
+    if (init_and_release) {
+      // The kinetic data structure (support planes, intersection graph, kinetic vertices, ...) is not needed anymore.
+      // Releasing it here keeps the peak memory at one kinetic data structure per thread plus the finalized results.
+      CGAL_assertion(partition.m_data.use_count() == 1);
+      partition.m_data.reset();
+    }
+    else
+      partition.m_data->restore_initial_state(std::move(initial_state));
+
+    return true;
+  }
+
+  // Moves the results of the Finalizer from the kinetic data structure into the Sub_partition.
+  // Afterwards, make_conformal() and all access functions only use the data in the Sub_partition.
+  void extract_finalized_data(Sub_partition& partition, std::size_t idx) {
+    Data_structure& data = *partition.m_data;
+
+    // Volumes
+    partition.volumes.resize(data.volumes().size());
+    for (std::size_t i = 0; i < data.volumes().size(); i++) {
+      partition.volumes[i].faces = std::move(data.volumes()[i].faces);
+      partition.volumes[i].centroid = data.volumes()[i].centroid;
+    }
+
+    // Vertices
+    partition.vertices = std::move(data.vertices());
+    partition.exact_vertices = std::move(data.exact_vertices());
+
+    // Faces
+    partition.face_neighbors.resize(data.face_to_volumes().size());
+    for (std::size_t j = 0; j < data.face_to_volumes().size(); j++) {
+      const auto& p = data.face_to_volumes()[j];
+      partition.face_neighbors[j] = std::make_pair(Index(idx, p.first), Index(idx, p.second));
+    }
+
+    partition.face2vertices.resize(data.face_to_vertices().size());
+    for (std::size_t j = 0; j < data.face_to_vertices().size(); j++) {
+      const auto& f = data.face_to_vertices()[j];
+      partition.face2vertices[j].resize(f.size());
+      for (std::size_t k = 0; k < f.size(); k++)
+        partition.face2vertices[j][k] = std::make_pair(idx, f[k]);
+    }
+
+    partition.face2sp = std::move(data.face_to_support_plane());
+    partition.face_part_of_input_polygon = std::move(data.face_is_part_of_input_polygon());
+    partition.face_input = std::move(data.face_to_input_polygon());
+
+    // Support planes
+    partition.sp_exact_planes.resize(data.number_of_support_planes());
+    partition.sp_input_polygon.resize(data.number_of_support_planes());
+    for (std::size_t i = 0; i < data.number_of_support_planes(); i++) {
+      partition.sp_exact_planes[i] = data.support_plane(i).exact_plane();
+      partition.sp_input_polygon[i] = data.support_plane(i).data().actual_input_polygon;
+    }
+
+    partition.input2sp = data.input_polygon_map();
+  }
+
+  // Merges the finalized partitions of the octree leaves into one conformal partition.
+  void merge_subpartitions(FT& conformal_time) {
+    for (std::size_t i = 0; i < m_partitions.size(); i++) {
+      const Sub_partition& partition = m_partition_nodes[m_partitions[i]];
+
+      for (std::size_t j = 0; j < partition.volumes.size(); j++)
+        m_volumes.push_back(std::make_pair(m_partitions[i], j));
+    }
+
+    for (std::size_t i = 0; i < m_volumes.size(); i++)
+      m_index2volume[m_volumes[i]] = i;
+
+    std::map<typename Intersection_kernel::Point_3, Index> pts2idx;
+
+    for (std::size_t i = 0; i < number_of_volumes(); i++) {
+      std::vector<Index> f1;
+      faces(i, std::back_inserter(f1));
+      for (const Index& f : f1) {
+        std::vector<Index>& face = m_partition_nodes[f.first].face2vertices[f.second];
+        for (std::size_t j = 0; j < face.size(); j++) {
+          auto it = pts2idx.emplace(m_partition_nodes[face[j].first].exact_vertices[face[j].second], face[j]);
+          if (!it.second)
+            face[j] = it.first->second;
+        }
+      }
+    }
+
+    Timer timer;
+    timer.start();
+    make_conformal(0);
+    conformal_time = timer.time();
+
+    if (m_parameters.verbose)
+      std::cout << "ksp v: " << m_partition_nodes[0].vertices.size() << " f: " << m_partition_nodes[0].face2vertices.size() << " vol: " << m_volumes.size() << std::endl;
+  }
+
   void collect_faces(std::size_t partition_idx, std::size_t sp_idx, std::vector<Index>& faces, typename Intersection_kernel::Plane_3& plane) {
     Sub_partition& p = m_partition_nodes[partition_idx];
 
-    plane = p.m_data->support_plane(sp_idx).data().exact_plane;
+    plane = p.sp_exact_planes[sp_idx];
 
-    const std::vector<std::size_t>& f2sp = p.m_data->face_to_support_plane();
+    const std::vector<std::size_t>& f2sp = p.face2sp;
 
     for (std::size_t i = 0; i < f2sp.size(); i++)
       if (f2sp[i] == sp_idx)
@@ -1703,27 +2011,70 @@ private:
 
   template<typename LCC, typename LCCIncrementalBuilder, typename VertexMap>
   void add_face_to_lcc(LCC &lcc, LCCIncrementalBuilder &ib, const Index& face, std::vector<Index> &vtx_of_face,
-                       const IkPoint_3& centroid, VertexMap &mapped_vertices, const std::vector<IkPoint_3> &vtx,
+                       const std::vector<std::size_t>& vtx_of_volume, VertexMap &mapped_vertices, const std::vector<IkPoint_3> &vtx,
                        std::vector<bool> &used_vertices) const {
     ib.begin_facet();
 
-    typename Intersection_kernel::Vector_3 norm;
-    std::size_t i = 0;
-    do {
-      std::size_t n = (i + 1) % vtx_of_face.size();
-      std::size_t nn = (n + 1) % vtx_of_face.size();
-      norm = CGAL::cross_product(vtx[mapped_vertices[vtx_of_face[n]]] - vtx[mapped_vertices[vtx_of_face[i]]], vtx[mapped_vertices[vtx_of_face[nn]]] - vtx[mapped_vertices[vtx_of_face[n]]]);
-      i++;
-    } while (norm.squared_length() == 0 && i < vtx_of_face.size());
+    // The orientation of the face is decided exactly, which is required for thin volumes, where an approximated centroid may lie outside.
+    // The points are chosen with their approximations, such that the exact predicates are usually decided by their filters.
+    auto approx = [&](std::size_t vi) {
+      return std::array<double, 3>{ CGAL::to_double(vtx[vi].x()), CGAL::to_double(vtx[vi].y()), CGAL::to_double(vtx[vi].z()) };
+    };
+    auto cross = [](const std::array<double, 3>& a, const std::array<double, 3>& b, const std::array<double, 3>& c) {
+      const double u[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, v[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+      return std::array<double, 3>{ u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
+    };
 
-    typename Intersection_kernel::FT len = CGAL::approximate_sqrt(norm.squared_length());
-    if (len != 0)
-      len = 1.0 / len;
-    norm = norm * len;
+    // Three consecutive vertices of the face spanning the largest approximated area. The face is convex, so they are not collinear.
+    const std::size_t nv = vtx_of_face.size();
+    std::size_t best = 0;
+    double best_area = -1;
+    for (std::size_t k = 0; k < nv; k++) {
+      const auto c = cross(approx(mapped_vertices[vtx_of_face[k]]), approx(mapped_vertices[vtx_of_face[(k + 1) % nv]]), approx(mapped_vertices[vtx_of_face[(k + 2) % nv]]));
+      const double area = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
+      if (area > best_area) {
+        best_area = area;
+        best = k;
+      }
+    }
+    if (CGAL::collinear(vtx[mapped_vertices[vtx_of_face[best]]], vtx[mapped_vertices[vtx_of_face[(best + 1) % nv]]], vtx[mapped_vertices[vtx_of_face[(best + 2) % nv]]])) {
+      // The approximation failed, search exactly.
+      for (best = 0; best < nv; best++)
+        if (!CGAL::collinear(vtx[mapped_vertices[vtx_of_face[best]]], vtx[mapped_vertices[vtx_of_face[(best + 1) % nv]]], vtx[mapped_vertices[vtx_of_face[(best + 2) % nv]]]))
+          break;
+    }
+    CGAL_assertion(best < nv);
+    const std::size_t pi = mapped_vertices[vtx_of_face[best]], qi = mapped_vertices[vtx_of_face[(best + 1) % nv]], ri = mapped_vertices[vtx_of_face[(best + 2) % nv]];
+    const IkPoint_3& p = vtx[pi];
+    const IkPoint_3& q = vtx[qi];
+    const IkPoint_3& r = vtx[ri];
 
-    bool outwards_oriented = (vtx[mapped_vertices[vtx_of_face[0]]] - centroid) * norm < 0;
+    // The volume is convex. Thus, every vertex of the volume that is not on the supporting plane of the face lies on its inner side.
+    // The vertex with the largest approximated distance to the plane is tested first.
+    const std::array<double, 3> ap = approx(pi), normal = cross(ap, approx(qi), approx(ri));
+    std::size_t far_vi = vtx_of_volume.front();
+    double far_dist = -1;
+    for (std::size_t vi : vtx_of_volume) {
+      const std::array<double, 3> a = approx(vi);
+      const double d = std::abs(normal[0] * (a[0] - ap[0]) + normal[1] * (a[1] - ap[1]) + normal[2] * (a[2] - ap[2]));
+      if (d > far_dist) {
+        far_dist = d;
+        far_vi = vi;
+      }
+    }
+    CGAL::Orientation inner = CGAL::orientation(p, q, r, vtx[far_vi]);
+    if (inner == CGAL::COPLANAR) {
+      // The approximation failed, search exactly.
+      for (std::size_t vi : vtx_of_volume) {
+        inner = CGAL::orientation(p, q, r, vtx[vi]);
+        if (inner != CGAL::COPLANAR)
+          break;
+      }
+    }
+    CGAL_assertion(inner != CGAL::COPLANAR);
 
-    if (!outwards_oriented)
+    // Faces are inserted such that the volume lies on the positive side of their vertex order.
+    if (inner != CGAL::POSITIVE)
       std::reverse(vtx_of_face.begin(), vtx_of_face.end());
 
     for (const Index& v : vtx_of_face) {
@@ -1737,16 +2088,24 @@ private:
     if (lcc.template attribute<2>(face_dart) == lcc.null_descriptor) {
       lcc.template set_attribute<2>(face_dart, lcc.template create_attribute<2>());
       // How to handle bbox planes that coincide with input polygons? Check support plane
-      std::size_t sp = m_partition_nodes[face.first].m_data->face_to_support_plane()[face.second];
+      std::size_t sp = m_partition_nodes[face.first].face2sp[face.second];
 
       // There are three different cases:
       // 1. face belongs to a plane from an input polygon
       // 2. face originates from octree splitting (and does not have an input plane)
       // 3. face lies on the bbox
-      int ip = static_cast<int>(m_partition_nodes[face.first].m_data->support_plane(sp).data().actual_input_polygon);
+      // Faces on a support plane of several coplanar input polygons refer to the input polygon they originate from.
+      // Faces on the bbox may coincide with an input polygon of the support plane.
+      int ip = static_cast<int>(m_partition_nodes[face.first].face_input[face.second]);
+      if (ip == -1)
+        ip = static_cast<int>(m_partition_nodes[face.first].sp_input_polygon[sp]);
 
-      if (ip != -1)
-        lcc.template info<2>(face_dart).input_polygon_index = static_cast<Face_support>(m_partition_nodes[face.first].input_polygons[ip]);
+      if (ip != -1) {
+        // Index of the inserted polygon. It differs from the index of the input polygon of the partition if degenerate polygons have been dropped.
+        const std::size_t input = m_regularized2input[m_partition_nodes[face.first].input_polygons[ip]].front();
+        lcc.template info<2>(face_dart).input_polygon_index = static_cast<Face_support>(input);
+        lcc.template info<2>(face_dart).input_plane_index = static_cast<int>(m_input_plane_indices[input]);
+      }
       else {
         // If there is no input polygon, check whether it has two neighbors
         auto n = neighbors(face);
@@ -1754,14 +2113,23 @@ private:
           lcc.template info<2>(face_dart).input_polygon_index = static_cast<Face_support>(-7);
         else
           lcc.template info<2>(face_dart).input_polygon_index = static_cast<Face_support>(n.second);
+        lcc.template info<2>(face_dart).input_plane_index = lcc.template info<2>(face_dart).input_polygon_index;
       }
 
-      lcc.template info<2>(face_dart).part_of_initial_polygon = m_partition_nodes[face.first].m_data->face_is_part_of_input_polygon()[face.second];
+      lcc.template info<2>(face_dart).part_of_initial_polygon = m_partition_nodes[face.first].face_part_of_input_polygon[face.second];
 
-      lcc.template info<2>(face_dart).plane = m_partition_nodes[face.first].m_data->support_plane(m_partition_nodes[face.first].m_data->face_to_support_plane()[face.second]).exact_plane();
+      lcc.template info<2>(face_dart).plane = m_partition_nodes[face.first].sp_exact_planes[sp];
     }
-    else {
-      CGAL_assertion(lcc.template info<2>(face_dart).part_of_initial_polygon == m_partition_nodes[face.first].m_data->face_is_part_of_input_polygon()[face.second]);
+    else if (!lcc.template info<2>(face_dart).part_of_initial_polygon && m_partition_nodes[face.first].face_part_of_input_polygon[face.second]) {
+      // A face on a split plane of the octree is present in both adjacent leaves. An input polygon lying in the split plane
+      // may only be assigned to one of the leaves, so only one of them marks the face as part of the input polygon.
+      const int ip = static_cast<int>(m_partition_nodes[face.first].face_input[face.second]);
+      if (ip != -1) {
+        const std::size_t input = m_regularized2input[m_partition_nodes[face.first].input_polygons[ip]].front();
+        lcc.template info<2>(face_dart).input_polygon_index = static_cast<Face_support>(input);
+        lcc.template info<2>(face_dart).input_plane_index = static_cast<int>(m_input_plane_indices[input]);
+      }
+      lcc.template info<2>(face_dart).part_of_initial_polygon = true;
     }
   }
 
@@ -1831,12 +2199,13 @@ private:
       idx = m_partition_nodes[f.first].face2vertices.size();
       // Add face into vector
       m_partition_nodes[f.first].face2vertices.push_back(std::vector<Index>());
-      m_partition_nodes[f.first].m_data->face_is_part_of_input_polygon().push_back(m_partition_nodes[f.first].m_data->face_is_part_of_input_polygon()[f.second]);
+      m_partition_nodes[f.first].face_part_of_input_polygon.push_back(m_partition_nodes[f.first].face_part_of_input_polygon[f.second]);
       // Add face index into volume
-      m_partition_nodes[f.first].m_data->volumes()[vol_idx].faces.push_back(idx);
+      m_partition_nodes[f.first].volumes[vol_idx].faces.push_back(idx);
       // Copy neighbor from already existing face
       m_partition_nodes[f.first].face_neighbors.push_back(m_partition_nodes[f.first].face_neighbors[f.second]);
-      m_partition_nodes[f.first].m_data->face_to_support_plane().push_back(m_partition_nodes[f.first].m_data->face_to_support_plane()[f.second]);
+      m_partition_nodes[f.first].face2sp.push_back(m_partition_nodes[f.first].face2sp[f.second]);
+      m_partition_nodes[f.first].face_input.push_back(m_partition_nodes[f.first].face_input[f.second]);
     }
     else {
       idx = f.second;
@@ -1856,9 +2225,9 @@ private:
       else if (vi.idB2.first != static_cast<std::size_t>(-1))
         vertices[i] = vi.idB2;
       else {
-        std::size_t vidx = m_partition_nodes[f.first].m_data->vertices().size();
-        m_partition_nodes[f.first].m_data->vertices().push_back(from_exact(vi.point_3));
-        m_partition_nodes[f.first].m_data->exact_vertices().push_back(vi.point_3);
+        std::size_t vidx = m_partition_nodes[f.first].vertices.size();
+        m_partition_nodes[f.first].vertices.push_back(from_exact(vi.point_3));
+        m_partition_nodes[f.first].exact_vertices.push_back(vi.point_3);
         vertices[i] = vi.idA2 = std::make_pair(f.first, vidx);
       }
     }
@@ -1940,7 +2309,7 @@ private:
   std::pair<std::size_t, int> find_portal(std::size_t volume, std::size_t former, const Index& vA, const Index& vB, std::size_t& portal) const {
     portal = static_cast<std::size_t>(-7);
     auto vol = m_volumes[volume];
-    std::vector<std::size_t>& faces = m_partition_nodes[vol.first].m_data->volumes()[vol.second].faces;
+    const std::vector<std::size_t>& faces = m_partition_nodes[vol.first].volumes[vol.second].faces;
 
     for (std::size_t f = 0; f < faces.size(); f++) {
       auto n = neighbors(std::make_pair(vol.first, faces[f]));
@@ -2094,7 +2463,7 @@ private:
   }
 
   void make_conformal(std::vector<Index>& a, std::vector<Index>& b, typename Intersection_kernel::Plane_3& plane) {
-    std::unordered_map<std::size_t, std::vector<Index> > a_sets, b_sets;
+    std::map<std::size_t, std::vector<Index> > a_sets, b_sets;
     for (const Index& i : a)
       a_sets[i.first].push_back(i);
     for (const Index& i : b)
@@ -2106,7 +2475,6 @@ private:
     std::vector< std::vector<std::vector<Constraint_info> > > a_constraints;
     std::vector< std::vector<std::vector<Constraint_info> > > b_constraints;
 
-    std::map<Index, Index> point_mapping;
 
     std::size_t idx = 0;
     a_constraints.resize(a_sets.size());
@@ -2167,7 +2535,26 @@ private:
     }
   }
 
-  void split_octree() {
+  // Projects p onto the plane along the coordinate axis that is most orthogonal to the plane, i.e., only the coordinate
+  // of that axis is changed. Like an orthogonal projection, the point is afterwards exactly on the plane, but the other
+  // two coordinates are kept as they are. This keeps the bit complexity of the exact coordinates low.
+  static typename Intersection_kernel::Point_3 project_along_axis(const typename Intersection_kernel::Plane_3& pl, const typename Intersection_kernel::Point_3& p) {
+    using IFT = typename Intersection_kernel::FT;
+    const IFT& a = pl.a();
+    const IFT& b = pl.b();
+    const IFT& c = pl.c();
+    const IFT& d = pl.d();
+    const double ax = CGAL::abs(CGAL::to_double(a)), ay = CGAL::abs(CGAL::to_double(b)), az = CGAL::abs(CGAL::to_double(c));
+    // The approximation of the largest coefficient is non-zero, thus the coefficient itself is non-zero.
+    if (az >= ax && az >= ay)
+      return typename Intersection_kernel::Point_3(p.x(), p.y(), -(a * p.x() + b * p.y() + d) / c);
+    if (ay >= ax)
+      return typename Intersection_kernel::Point_3(p.x(), -(a * p.x() + c * p.z() + d) / b, p.z());
+    return typename Intersection_kernel::Point_3(-(b * p.y() + c * p.z() + d) / a, p.y(), p.z());
+  }
+
+  // Returns false if the input polygons do not span a volume, e.g., if all of them lie in the same plane.
+  bool split_octree() {
     // Octree creation for sub partition
     std::size_t count = 0;
     for (const auto& p : m_input_polygons)
@@ -2188,11 +2575,14 @@ private:
       m_transform = to_exact(get_obb2abb(m_input_polygons));
       auto trans = from_exact(m_transform);
 
-      for (const auto& p : m_input_polygons) {
+      for (std::size_t i = 0; i < m_input_polygons.size(); i++) {
+        const auto& p = m_input_polygons[i];
         std::size_t idx = m_points.size();
         for (const Point_3& pt : p) {
           m_points.push_back(trans.transform(pt));
-          pts.push_back(m_transform.transform(to_exact(pt)));
+          // Project exactly onto the support plane, so that the clipped polygons are exactly
+          // incident to the intersection lines of their support plane and the octree box planes.
+          pts.push_back(m_transform.transform(project_along_axis(m_input_planes[i], to_exact(pt))));
         }
 
         m_polygons.push_back(std::vector<std::size_t>(p.size()));
@@ -2202,13 +2592,27 @@ private:
     else {
       m_transform = CGAL::Aff_transformation_3<Intersection_kernel>(CGAL::IDENTITY);
 
-      for (const auto& p : m_input_polygons) {
+      for (std::size_t i = 0; i < m_input_polygons.size(); i++) {
+        const auto& p = m_input_polygons[i];
         std::size_t idx = m_points.size();
         std::copy(p.begin(), p.end(), std::back_inserter(m_points));
+        // Project exactly onto the support plane, so that the clipped polygons are exactly
+        // incident to the intersection lines of their support plane and the octree box planes.
         for (const auto &pt : p)
-          pts.push_back(to_exact(pt));
+          pts.push_back(project_along_axis(m_input_planes[i], to_exact(pt)));
         m_polygons.push_back(std::vector<std::size_t>(p.size()));
         std::iota(m_polygons.back().begin(), m_polygons.back().end(), idx);
+      }
+    }
+
+    // The bounding box, which is dilated per dimension, needs a positive extent in each dimension.
+    for (std::size_t d = 0; d < 3; d++) {
+      auto cmp = [d](const typename Intersection_kernel::Point_3& a, const typename Intersection_kernel::Point_3& b) { return a[d] < b[d]; };
+      auto mm = std::minmax_element(pts.begin(), pts.end(), cmp);
+      if (mm.first == pts.end() || (*mm.first)[d] == (*mm.second)[d]) {
+        KSP::internal::Log_line() << "Warning: The input polygons lie in a plane " << (m_parameters.reorient_bbox ? "" : "orthogonal to an axis ")
+          << "and do not span a volume. No partition is created.";
+        return false;
       }
     }
 
@@ -2253,6 +2657,20 @@ private:
         // Get consistent Plane_3 from Octree to generate exact planes
 
         auto polys = m_octree->data(node);
+
+        // The octree clipping assigns a polygon that only touches the box of the node in a vertex or along an edge
+        // to that node as well.
+        polys.erase(std::remove_if(polys.begin(), polys.end(), [](const auto& p) {
+          const auto& pts = p.second;
+          std::size_t j = 1;
+          while (j < pts.size() && pts[j] == pts[0])
+            j++;
+          for (std::size_t k = j + 1; k < pts.size(); k++)
+            if (!CGAL::collinear(pts[0], pts[j], pts[k]))
+              return false;
+          return true;
+          }), polys.end());
+
         for (std::size_t j = 0; j < polys.size(); j++) {
           m_partition_nodes[idx].input_polygons.push_back(polys[j].first);
           m_partition_nodes[idx].m_input_planes.push_back(m_input_planes[polys[j].first]);
@@ -2309,7 +2727,10 @@ private:
         }
         idx++;
       }
-    std::cout << "input split into " << m_partition_nodes.size() << " partitions" << std::endl;
+    if (m_parameters.verbose)
+      std::cout << "input split into " << m_partition_nodes.size() << " partitions" << std::endl;
+
+    return true;
   }
 };
 
@@ -2320,6 +2741,7 @@ void write_cmap_attribute_node(boost::property_tree::ptree& node, const typename
   node.add("v.c", fa.plane.c());
   node.add("v.d", fa.plane.d());
   node.add("v.ip", fa.input_polygon_index);
+  node.add("v.ipl", fa.input_plane_index);
   node.add("v.poip", fa.part_of_initial_polygon);
 }
 
@@ -2349,6 +2771,7 @@ void read_cmap_attribute_node
   double d = v.second.get<double>("d");
   fa.plane = Exact_predicates_exact_constructions_kernel::Plane_3(a, b, c, d);
   fa.input_polygon_index = v.second.get<int>("ip");
+  fa.input_plane_index = v.second.get<int>("ipl", fa.input_polygon_index);
   fa.part_of_initial_polygon = v.second.get<bool>("poip");
 }
 
