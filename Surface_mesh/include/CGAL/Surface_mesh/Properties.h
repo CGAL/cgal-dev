@@ -467,7 +467,7 @@ public:
           return;
         for (std::size_t i=n; i<parrays_.size(); ++i)
             delete parrays_[i];
-        parrays_.resize(n);
+        parrays_.erase(parrays_.begin() + n, parrays_.end());
     }
 
     // free unused space in all arrays
