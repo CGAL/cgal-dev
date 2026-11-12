@@ -90,8 +90,11 @@ random_3D_ray(const AABB_tree& aabb_tree, CGAL::Random& rnd)
 template<typename FT>
 bool is_equal(const FT& a, const FT& b)
 {
-  if(std::is_floating_point<FT>::value)
-    return (CGAL::abs(a - b) <= 1e-7); // numeric_limits' epsilon is too restrictive...
+  if(std::is_floating_point<FT>::value){
+    FT d = a - b;
+    d = CGAL::abs(d);
+    return ( d <= 1e-7); // numeric_limits' epsilon is too restrictive...
+  }
   else
     return (a == b);
 }
@@ -436,7 +439,8 @@ void test_locate_in_face(const G& g,
 
   loc = PMP::locate_vertex<FT>(v, g);
 
-  assert(is_equal(loc.second[CGAL::vertex_index_in_face(v, loc.first, g)], FT(1)));
+  auto index = CGAL::vertex_index_in_face(v, loc.first, g);
+  assert(index >= 0 && index < 3 && is_equal(loc.second[index], FT(1)));
   assert(is_equal(loc.second[(CGAL::vertex_index_in_face(v, loc.first, g) + 1) % 3], FT(0)));
   assert(is_equal(loc.second[(CGAL::vertex_index_in_face(v, loc.first, g) + 2) % 3], FT(0)));
 
@@ -456,7 +460,7 @@ void test_locate_in_face(const G& g,
   typedef typename boost::property_map_value<G, CGAL::vertex_point_t>::type     Point;
 
   Point p2 = get(CGAL::vertex_point, g, v);
-  PMP::locate_in_face(p2, f, g);
+  loc = PMP::locate_in_face(p2, f, g);
   assert(loc.first == f && is_equal(loc.second[v_id], FT(1)));
 
   // ---------------------------------------------------------------------------
