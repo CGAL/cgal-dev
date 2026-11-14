@@ -761,7 +761,7 @@ bool decimate_impl(const TriangleMesh& tm,
           //      we could work on the graph on constraint and recover only the orientation
           //      of the edge. To be done if someone find it too slow.
           //      In particular, in the loop to compute face normals, corners contains all the CCBs of each face
-          //      and we could seperate them and have them cleanly
+          //      and we could separate them and have them cleanly
           std::vector<halfedge_descriptor> hborders;
           CGAL::Face_filtered_graph<TriangleMesh> ffg(tm, static_cast<PID>(cc_id), face_cc_ids);
           extract_boundary_cycles(ffg, std::back_inserter(hborders));
