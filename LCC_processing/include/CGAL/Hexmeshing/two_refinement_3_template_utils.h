@@ -202,7 +202,7 @@ namespace CGAL::internal::Hexmeshing
     auto merge_face = face1 != lcc.null_dart_descriptor ? face1 : face2;
 
     // 3-template on the border of the grid: the removed volume had no
-    // neighbour on either side, so there is nothing to sew and no face left
+    // neighbor on either side, so there is nothing to sew and no face left
     // to carry the plane information. Such border templates are already
     // ignored when setting up the next level (see setup_next_level_face).
     if (merge_face == lcc.null_dart_descriptor)

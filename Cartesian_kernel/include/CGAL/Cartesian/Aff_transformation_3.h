@@ -52,7 +52,7 @@ namespace Cartesian_impl
     }
   };
 
-  // partial specialization optimising translation for EPECK
+  // partial specialization optimizing translation for EPECK
   template <class R_>
   struct Aff_storage_3<R_, true>
   {
