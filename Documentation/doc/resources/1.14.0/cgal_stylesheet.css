@@ -547,3 +547,9 @@ tr.template .memItemRight {
 td.memTemplParams {
   white-space: normal;
 }
+
+.cgal-cite { position: relative; display: inline-block; white-space: nowrap;
+             color: var(--cgal-link-color, #4665A2); }   /* use the doc's link color */
+.cgal-cite a.el { color: inherit; text-decoration: none; }
+.cgal-cite a.el::after { content: ""; position: absolute; inset: 0; }
+.cgal-cite:hover { text-decoration: underline; cursor: pointer; }
