@@ -1650,6 +1650,9 @@ private:
                  std::vector<Cell_handle>& hole);
 
 protected:
+  template < class PointRemover >
+  void remove_last_vertex(PointRemover& r);
+
   /** @name Removal */
   template < class PointRemover, class CoverManager >
   bool periodic_remove(Vertex_handle v, PointRemover& remover, CoverManager& cover_manager,
@@ -3317,7 +3320,7 @@ remove(Vertex_handle v, PointRemover& r, Conflict_tester& t, CoverManager& cover
   {
     std::vector<Vertex_handle> vhrem;
     if(number_of_vertices() == 1) {
-      clear();
+      remove_last_vertex(r);
       return;
     }
     Virtual_vertex_map_it vvmit = virtual_vertices.find(v);
@@ -3341,6 +3344,21 @@ remove(Vertex_handle v, PointRemover& r, Conflict_tester& t, CoverManager& cover
       remove(v, r, t, cover_manager);
   }
 }
+
+  // Removes the only point of a triangulation, with care for the possible hidden vertices
+  template < class GT, class TDS >
+  template < class PointRemover >
+  void
+  Periodic_3_triangulation_3<GT,TDS>::
+  remove_last_vertex(PointRemover& r)
+  {
+    CGAL_precondition(number_of_vertices() == 1);
+
+    for(Cell_iterator cit = cells_begin(), cend = cells_end(); cit != cend; ++cit)
+      r.add_hidden_points(cit);
+
+    clear();
+  }
 
 /*! \brief removes a vertex from the triangulation.
  *
