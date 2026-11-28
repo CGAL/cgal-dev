@@ -995,7 +995,6 @@ void compute_intersecting_pairs(const PointRange& points, const PolygonRange& tr
   Real_timer t;
   t.start();
 #endif
-  using Point = typename PointMap::value_type;
   using VPM = internal::Property_map_for_soup<PointRange, PointMap>;
   using AABB_tree_helper = CGAL::Polygon_mesh_processing::internal::AABB_tree_soup_helper<PointRange, PolygonRange, Kernel, VPM>;
   using Tree = typename AABB_tree_helper::Tree;
