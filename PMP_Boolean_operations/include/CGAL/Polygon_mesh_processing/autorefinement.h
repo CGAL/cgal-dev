@@ -1002,8 +1002,8 @@ void compute_intersecting_pairs(const PointRange& points, const PolygonRange& tr
 
   using Bbox_map      = Pointer_property_map<Bbox_3>::type;
   using Ref_point_map = Pointer_property_map<Epick::Point_3>::type;
-  using Compute_bbox = typename AABB_tree_helper::Compute_bbox<Bbox_map>;
-  using Split_primitives = typename AABB_tree_helper::Split_primitives<Ref_point_map>;
+  using Compute_bbox = typename AABB_tree_helper::template Compute_bbox<Bbox_map>;
+  using Split_primitives = typename AABB_tree_helper::template Split_primitives<Ref_point_map>;
 
   CGAL::Cartesian_converter<Kernel, Epick> to_input;
 
@@ -1080,8 +1080,8 @@ void compute_intersecting_pairs(const PointRange& points, const PolygonRange& tr
   else
 #endif
   {
-    tree1.template custom_build(compute_bbox, split_primitives);
-    tree2.template custom_build(compute_bbox, split_primitives);
+    tree1.custom_build(compute_bbox, split_primitives);
+    tree2.custom_build(compute_bbox, split_primitives);
   }
 
 #ifdef CGAL_BO3_AABB_TIMERS
